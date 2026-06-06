@@ -18,6 +18,7 @@ from pathlib import Path
 from .config import CURRENT_SEASON, DEFAULT_LEAGUE, DEFAULT_SCORING
 from .ingest import build_histories
 from .project import project_base_points
+from .ranking import build_board
 from .schema import Contract, Meta, Player, Projection, RawStats
 
 OUTPUT_DIR = Path(__file__).resolve().parents[2] / "output"
@@ -50,7 +51,9 @@ def build_contract(season: int) -> Contract:
                     projection=Projection(base_points=base),
                 )
             )
-    players.sort(key=lambda p: p.projection.base_points, reverse=True)
+    # VORP -> overall/position ranks -> tiers (operates on base_points until soft signals land).
+    build_board(players, DEFAULT_LEAGUE)
+    players.sort(key=lambda p: p.projection.overall_rank or 10**9)
 
     meta = Meta(
         generated_at=datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ"),
@@ -70,16 +73,25 @@ def main() -> None:
 
     contract = build_contract(args.season)
 
-    # Human-readable eyeball check: top-N per position.
+    # Human-readable eyeball check.
+    print(f"\nDraft board — {args.season} (Full PPR, 12-team; veterans only; rookies = later slice)\n")
+    print(f"=== OVERALL (VBD / VORP, top {args.top}) ===")
+    for p in contract.players[: args.top]:
+        age = f"{p.age:.0f}" if p.age is not None else "??"
+        print(f"  {p.projection.overall_rank:3d}. {p.name:24s} {p.position:2s} {p.team:3s} "
+              f"age {age}  pts {p.projection.base_points:6.1f}  vorp {p.projection.vorp:6.1f}  T{p.projection.tier}")
+    print()
+
     by_pos: dict[str, list[Player]] = {}
     for p in contract.players:
         by_pos.setdefault(p.position, []).append(p)
-    print(f"\nbase_points rankings — {args.season} (Full PPR, veterans only; rookies = later slice)\n")
     for pos in SKILL_POSITIONS:
-        print(f"=== {pos} (top {args.top}) ===")
-        for i, p in enumerate(by_pos.get(pos, [])[: args.top], 1):
+        group = sorted(by_pos.get(pos, []), key=lambda p: p.projection.position_rank or 10**9)
+        print(f"=== {pos} (top {args.top}, by tier) ===")
+        for p in group[: args.top]:
             age = f"{p.age:.0f}" if p.age is not None else "??"
-            print(f"  {i:2d}. {p.name:24s} age {age}  {p.projection.base_points:6.1f}")
+            print(f"  T{p.projection.tier} {p.projection.position_rank:2d}. {p.name:24s} {p.team:3s} "
+                  f"age {age}  pts {p.projection.base_points:6.1f}  vorp {p.projection.vorp:6.1f}")
         print()
 
     if not args.no_write:

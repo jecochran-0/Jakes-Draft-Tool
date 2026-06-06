@@ -9,11 +9,11 @@ communicate through one JSON file (`schema/contract.schema.json`):
 All four outputs (overall ranks, positional tiers, projected points, value-vs-ADP) are views
 over **one number per player: projected fantasy points.** One projection engine; four views.
 
-## Status — Slice 1: Foundation + validation gate ✅
+## Status
 
 Decisions locked: **12-team / 1QB-2RB-2WR-1TE-1FLEX**, **Full PPR**.
 
-Built and verified:
+### Slice 1 — Foundation + validation gate ✅
 - Locked JSON contract (`schema/`) + pydantic models (`pipeline/src/ffrank/schema.py`).
 - nflreadpy ingestion (column names verified at runtime via `ffrank.probe`).
 - Configurable scoring; our PPR matches nflverse `fantasy_points_ppr` (tested).
@@ -28,9 +28,17 @@ Known caveat (by design): at the very top (top-24), the blend is a wash with nai
 slightly softer for WR — the most volatile position. Refining the volatile top is exactly the
 job of the deferred **soft-signals** slice.
 
-Deferred to later slices (fields reserved in the contract now): Sleeper ADP, Vegas team
-totals, hand-curated team-situation table, LLM soft-signals (prompt-emit + merge), full
-VORP / ranks / tiers in the output, and the Next.js app.
+### Slice 2 — VORP / ranks / tiers ✅ (`pipeline/src/ffrank/ranking.py`)
+- **VORP** = ranking-metric − replacement level (the greedy rule from slice 1). Makes positions
+  comparable (value-based drafting): scarce-position studs rise, surplus QB points discount.
+- **`overall_rank`** by VORP, **`position_rank`** within position, **positional tiers** by
+  gap-detection on the draftable top of each position.
+- Ranks on `base_points` today; auto-switches to `adjusted_points` once soft signals land
+  (`ranking.ranking_metric`). The output JSON now populates vorp/ranks/tier (100%).
+
+Deferred to later slices (fields reserved in the contract): Sleeper ADP + `value_vs_adp`
+(needs `overall_rank`, now available), Vegas team totals, hand-curated team-situation table,
+LLM soft-signals (prompt-emit + merge), and the Next.js app.
 
 ## Quickstart
 
