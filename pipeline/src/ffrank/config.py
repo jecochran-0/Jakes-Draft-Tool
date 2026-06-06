@@ -24,6 +24,22 @@ SEASON_GAMES = 17
 DEFAULT_SCORING = ScoringConfig()          # Full PPR defaults
 DEFAULT_LEAGUE = LeagueConfig()            # 12-team standard
 
+# Scoring presets — the spec's three formats. Different format = re-run = its own output file.
+# Only the per-reception value changes; everything else (yardage, TDs, etc.) is shared.
+# Note: ranking is unaffected by the baseline shrink (a rank-preserving per-position constant);
+# changing format re-scores points and so re-orders the board on real scoring differences.
+SCORING_CONFIGS: dict[str, ScoringConfig] = {
+    "ppr": ScoringConfig(ppr=1.0, rec=1.0),
+    "half": ScoringConfig(ppr=0.5, rec=0.5),
+    "standard": ScoringConfig(ppr=0.0, rec=0.0),
+}
+
+
+def scoring_for(key: str) -> ScoringConfig:
+    if key not in SCORING_CONFIGS:
+        raise ValueError(f"unknown scoring '{key}'; choose from {sorted(SCORING_CONFIGS)}")
+    return SCORING_CONFIGS[key]
+
 
 def base_lineup_slots(league: LeagueConfig) -> dict[str, int]:
     """Non-flex starting slots per position, league-wide (teams * per-team)."""

@@ -19,7 +19,7 @@ from pathlib import Path
 import requests
 
 from .adp import attach_market, fetch_adp
-from .config import CURRENT_SEASON, DEFAULT_LEAGUE, DEFAULT_SCORING
+from .config import CURRENT_SEASON, DEFAULT_LEAGUE, scoring_for
 from .ingest import build_histories, build_rookie_histories
 from .project import PlayerHistory, project_base_points
 from .ranking import build_board
@@ -54,12 +54,13 @@ def _player_from_history(h: PlayerHistory) -> Player:
     )
 
 
-def build_contract(season: int, with_adp: bool = True, with_rookies: bool = True,
-                   with_vegas: bool = True, emit_prompts: bool = False,
-                   soft_scores_path: str | None = None) -> Contract:
+def build_contract(season: int, scoring_key: str = "ppr", with_adp: bool = True,
+                   with_rookies: bool = True, with_vegas: bool = True,
+                   emit_prompts: bool = False, soft_scores_path: str | None = None) -> Contract:
+    scoring = scoring_for(scoring_key)
     histories: list[PlayerHistory] = []
     for pos in SKILL_POSITIONS:
-        histories.extend(build_histories(season, DEFAULT_SCORING, position=pos))
+        histories.extend(build_histories(season, scoring, position=pos))
     if with_rookies:
         histories.extend(build_rookie_histories(season))
 
@@ -106,7 +107,7 @@ def build_contract(season: int, with_adp: bool = True, with_rookies: bool = True
     # Live ADP join -> market block (value_vs_adp uses the FINAL overall_rank). Never hard-fail.
     if with_adp:
         try:
-            payload = fetch_adp(scoring_key="ppr", teams=DEFAULT_LEAGUE.teams)
+            payload = fetch_adp(scoring_key=scoring_key, teams=DEFAULT_LEAGUE.teams)
             matched, total = attach_market(players, payload)
             meta_info = payload.get("meta", {})
             print(f"ADP: matched {matched}/{total} skill players "
@@ -117,7 +118,7 @@ def build_contract(season: int, with_adp: bool = True, with_rookies: bool = True
     meta = Meta(
         generated_at=datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ"),
         season=season,
-        scoring_config=DEFAULT_SCORING,
+        scoring_config=scoring,
         league_config=DEFAULT_LEAGUE,
     )
     return Contract(meta=meta, players=players)
@@ -150,6 +151,8 @@ def _print_audit(players: list[Player]) -> None:
 def main() -> None:
     ap = argparse.ArgumentParser()
     ap.add_argument("--season", type=int, default=CURRENT_SEASON)
+    ap.add_argument("--scoring", choices=["ppr", "half", "standard"], default="ppr",
+                    help="scoring format (one output file per format)")
     ap.add_argument("--top", type=int, default=24)
     ap.add_argument("--no-write", action="store_true")
     ap.add_argument("--no-adp", action="store_true", help="skip the live ADP fetch (offline)")
@@ -161,7 +164,7 @@ def main() -> None:
                     help="apply pasted Claude soft scores and re-rank on adjusted_points (step C)")
     args = ap.parse_args()
 
-    contract = build_contract(args.season, with_adp=not args.no_adp,
+    contract = build_contract(args.season, scoring_key=args.scoring, with_adp=not args.no_adp,
                               with_rookies=not args.no_rookies, with_vegas=not args.no_vegas,
                               emit_prompts=args.emit_prompts, soft_scores_path=args.soft_scores)
 
@@ -214,7 +217,7 @@ def main() -> None:
 
     if not args.no_write:
         OUTPUT_DIR.mkdir(parents=True, exist_ok=True)
-        out = OUTPUT_DIR / f"rankings_{args.season}_ppr.json"
+        out = OUTPUT_DIR / f"rankings_{args.season}_{args.scoring}.json"
         out.write_text(contract.model_dump_json(indent=2))
         print(f"Wrote {len(contract.players)} players -> {out}")
 

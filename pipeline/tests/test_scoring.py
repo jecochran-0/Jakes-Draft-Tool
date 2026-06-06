@@ -1,6 +1,25 @@
 """Scoring correctness: our configurable PPR must match nflverse fantasy_points_ppr."""
-from ffrank.config import DEFAULT_SCORING
+import pytest
+
+from ffrank.config import DEFAULT_SCORING, scoring_for
 from ffrank.ingest import stats_table
+from ffrank.scoring import points
+
+
+def test_scoring_presets():
+    assert scoring_for("ppr").rec == 1.0
+    assert scoring_for("half").rec == 0.5
+    assert scoring_for("standard").rec == 0.0
+    with pytest.raises(ValueError):
+        scoring_for("superflex")
+
+
+def test_format_changes_receiving_points():
+    # A pure receiving line: 6 catches, 80 yards. PPR=14, Half=11, Standard=8.
+    row = {"receptions": 6, "receiving_yards": 80}
+    assert points(row, scoring_for("ppr")) == pytest.approx(14.0)
+    assert points(row, scoring_for("half")) == pytest.approx(11.0)
+    assert points(row, scoring_for("standard")) == pytest.approx(8.0)
 
 
 def test_ppr_matches_nflverse():

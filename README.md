@@ -109,22 +109,31 @@ optional soft-signals layer. Remaining: the **Next.js app (Part B)**, paused mid
 cd pipeline
 python3.12 -m venv .venv
 .venv/bin/pip install nflreadpy polars pandas scipy pydantic requests pytest
+```
 
-# CLI modules are run with src on the path (no install step needed):
+The `Makefile` wraps the common commands (sets `PYTHONPATH=src`, uses the venv):
+
+```bash
+make board                       # build + print the draft board, write the JSON
+make board SCORING=half          # Half-PPR (also: standard) -> rankings_2026_half.json
+make board SEASON=2025           # any season
+make gate                        # retro-validation gate (downloads nflverse data)
+make test                        # pytest
+make probe SEASON=2024           # print live nflreadpy schemas
+make help                        # all targets
+```
+
+**Scoring formats (spec §2 — one file per format):** `--scoring ppr|half|standard` (default `ppr`)
+re-scores receptions and writes `rankings_<season>_<format>.json`. The ADP join auto-matches the
+same format.
+
+Raw commands (equivalent, if you'd rather not use `make`):
+
+```bash
 export PYTHONPATH=src
-
-# Verify library column names against the live nflverse data:
-.venv/bin/python -m ffrank.probe
-
-# Run the validation gate (network; downloads nflverse data):
+.venv/bin/python -m ffrank.rank --season 2026 --scoring ppr --top 24
 .venv/bin/python -m ffrank.validate
-
-# Produce base_points rankings + a contract-shaped JSON for a season:
-.venv/bin/python -m ffrank.rank --season 2026 --top 24
-# -> pipeline/output/rankings_2026_ppr.json
-
-# Tests read src/ via pyproject's pythonpath config — no PYTHONPATH needed:
-.venv/bin/python -m pytest -q
+.venv/bin/python -m pytest -q     # (tests don't need PYTHONPATH; pyproject handles it)
 ```
 
 ## Layout
