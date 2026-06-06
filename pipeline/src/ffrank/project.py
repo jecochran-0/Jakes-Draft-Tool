@@ -52,6 +52,17 @@ ROOKIE_BASE_BY_POS: dict[str, list[tuple[int, float]]] = {
 }
 _ROOKIE_FALLBACK = [(10, 175.0), (32, 140.0), (64, 100.0), (100, 70.0), (256, 40.0)]
 
+# Rookie anchors above are PPR. Veteran points scale with format (receptions), but the anchors
+# don't — so in half/standard rookies would float up relative to a compressed veteran field.
+# These factors (derived empirically from the median of the top-36 veterans per position in
+# each format vs PPR) scale the anchors so rookies track the same compression. QB ~ unchanged
+# (no receptions); WR loses the most without PPR.
+ROOKIE_FORMAT_SCALE: dict[str, dict[str, float]] = {
+    "ppr":      {"QB": 1.0, "RB": 1.00, "WR": 1.00, "TE": 1.00},
+    "half":     {"QB": 1.0, "RB": 0.92, "WR": 0.84, "TE": 0.83},
+    "standard": {"QB": 1.0, "RB": 0.83, "WR": 0.67, "TE": 0.63},
+}
+
 
 @dataclass
 class SeasonLine:
@@ -67,7 +78,8 @@ class PlayerHistory:
     position: str
     age: float | None              # age during the projected season
     gsis_id: str | None = None     # raw nflverse id, for joining actuals in validation
-    team: str = ""                 # latest team (enriched further by the ADP/roster slice)
+    team: str = ""                 # latest team (current roster)
+    last_stats_team: str | None = None  # team of the most-recent stat season (team-change detection)
     is_rookie: bool = False
     # Most-recent-season context — output enrichment for raw_stats, NOT projection inputs.
     last_snap_share: float | None = None
@@ -146,8 +158,10 @@ def project_veteran(p: PlayerHistory, games_target: int = SEASON_GAMES) -> float
     return calibrated_pg * games_target * age_multiplier(p.position, p.age)
 
 
-def project_rookie(p: PlayerHistory, games_target: int = SEASON_GAMES) -> float:
-    """Position-aware draft-capital prior scaled by landing-spot opportunity. (Vegas later.)"""
+def project_rookie(p: PlayerHistory, scoring_key: str = "ppr",
+                   games_target: int = SEASON_GAMES) -> float:
+    """Position-aware draft-capital prior, scaled to the scoring format and landing-spot
+    opportunity. (The Vegas landing-spot tilt is applied downstream in finalize_adjusted.)"""
     pick = p.draft_pick if p.draft_pick is not None else 256
     anchors = ROOKIE_BASE_BY_POS.get(p.position, _ROOKIE_FALLBACK)
     base = anchors[-1][1]
@@ -155,11 +169,13 @@ def project_rookie(p: PlayerHistory, games_target: int = SEASON_GAMES) -> float:
         if pick <= threshold:
             base = value
             break
-    return base * p.opportunity_factor
+    fmt = ROOKIE_FORMAT_SCALE.get(scoring_key, ROOKIE_FORMAT_SCALE["ppr"])
+    return base * fmt.get(p.position, 1.0) * p.opportunity_factor
 
 
-def project_base_points(p: PlayerHistory, games_target: int = SEASON_GAMES) -> float:
+def project_base_points(p: PlayerHistory, scoring_key: str = "ppr",
+                        games_target: int = SEASON_GAMES) -> float:
     """Dispatch: rookies use the draft-capital branch, everyone else the stat blend."""
     if p.is_rookie or not p.seasons:
-        return project_rookie(p, games_target)
+        return project_rookie(p, scoring_key, games_target)
     return project_veteran(p, games_target)

@@ -6,6 +6,7 @@ from ffrank.schema import LeagueConfig, Player, Projection, RawStats
 from ffrank.softsignals import (SYSTEM_PROMPT, apply_soft_scores, attach_situation, audit,
                                 emit_player_prompts, load_soft_scores, load_team_table,
                                 situation_facts, team_row)
+from ffrank.vegas import finalize_adjusted
 
 
 def _p(pid, name, pos, team, base, rank=None, rookie=False):
@@ -29,23 +30,26 @@ def test_load_soft_scores_clamps_and_keys_by_id(tmp_path):
     assert "d" not in scores
 
 
-def test_apply_sets_adjusted_and_reasoning():
+def test_apply_sets_soft_fields_only():
+    # apply_soft_scores sets soft_score/reasoning; finalize_adjusted computes adjusted_points.
     players = [_p("a", "A", "RB", "ATL", 200.0), _p("b", "B", "RB", "ATL", 200.0)]
     n = apply_soft_scores(players, {"a": (1.10, "expanded role")})
     assert n == 1
-    assert players[0].projection.adjusted_points == 220.0
     assert players[0].situation.soft_score == 1.10
     assert players[0].situation.soft_reasoning == "expanded role"
-    # Unscored player keeps adjusted None -> ranking falls back to base.
-    assert players[1].projection.adjusted_points is None
+    assert players[0].projection.adjusted_points is None  # not set yet
+    finalize_adjusted(players, {}, set())                 # no Vegas; soft only
+    assert players[0].projection.adjusted_points == 220.0
+    assert players[1].projection.adjusted_points is None   # unscored -> ranks on base
 
 
 def test_adjusted_drives_ranking():
-    # Identical base; the boosted player must out-rank the faded one after re-ranking.
+    # Identical base; the boosted player must out-rank the faded one after finalize + re-rank.
     a = _p("a", "Boosted", "WR", "ATL", 200.0)
     b = _p("b", "Faded", "WR", "ATL", 200.0)
     pool = [a, b] + [_p(f"x{i}", f"X{i}", "WR", "ATL", 150 - i) for i in range(40)]
     apply_soft_scores(pool, {"a": (1.15, "elite fit"), "b": (0.85, "lost role")})
+    finalize_adjusted(pool, {}, set())
     build_board(pool, LeagueConfig())
     assert a.projection.overall_rank < b.projection.overall_rank
 
@@ -84,6 +88,7 @@ def test_audit_orders_by_absolute_move():
     players = [_p("a", "Big", "RB", "ATL", 200.0), _p("b", "Small", "RB", "ATL", 200.0),
                _p("c", "None", "RB", "ATL", 200.0)]
     apply_soft_scores(players, {"a": (1.15, "x"), "b": (1.02, "y")})  # c unscored
+    finalize_adjusted(players, {}, set())
     movers = audit(players)
     assert movers[0].id == "a" and movers[1].id == "b"
     assert all(m.projection.adjusted_points is not None for m in movers)

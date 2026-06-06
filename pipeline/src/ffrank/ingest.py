@@ -169,6 +169,7 @@ def build_histories(
                 age=age,
                 gsis_id=gsis_id,
                 team=m.get("latest_team") or last.get("recent_team") or "",
+                last_stats_team=last.get("recent_team"),
                 is_rookie=False,            # veterans only (have prior-season rows by construction)
                 seasons=seasons,
                 draft_pick=m.get("draft_pick"),

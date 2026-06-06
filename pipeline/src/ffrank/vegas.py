@@ -113,3 +113,57 @@ def attach_vegas(players: list[Player], team_totals: dict[str, float]) -> int:
         p.situation.vegas_team_total = total
         n += 1
     return n
+
+
+# ----- Mechanical Vegas factor + unified adjusted_points (targeted, option B) ----------------
+
+# A team's implied total is a proxy for offensive quality. We tilt projections toward it, but
+# clamped small and applied ONLY where it's NEW information (see new_env_player_ids) so we don't
+# double-count the offense already baked into a stay-put veteran's historical points.
+VEGAS_SENSITIVITY = 0.5          # fraction of the team's total-vs-average gap to pass through
+VEGAS_CLAMP = (0.92, 1.08)       # +/-8% hard bound
+
+
+def league_average(team_totals: dict[str, float]) -> float | None:
+    return mean(team_totals.values()) if team_totals else None
+
+
+def vegas_multiplier(team_total: float, league_avg: float | None) -> float:
+    """Clamped multiplier from a team's total relative to the league average. 1.0 if no average."""
+    if not league_avg or league_avg <= 0:
+        return 1.0
+    raw = 1.0 + VEGAS_SENSITIVITY * (team_total / league_avg - 1.0)
+    lo, hi = VEGAS_CLAMP
+    return round(max(lo, min(hi, raw)), 4)
+
+
+def new_env_player_ids(histories) -> set[str]:
+    """Players whose CURRENT environment isn't reflected in their stats: rookies (no history)
+    and team-changers (history is on a different team). Only these get the Vegas tilt."""
+    ids: set[str] = set()
+    for h in histories:
+        if h.is_rookie or (h.last_stats_team and h.team and h.last_stats_team != h.team):
+            ids.add(h.player_id)
+    return ids
+
+
+def finalize_adjusted(players: list[Player], team_totals: dict[str, float],
+                      new_env_ids: set[str]) -> int:
+    """Set adjusted_points = base x vegas_mult x soft_mult (spec §6b), the single place adjusted
+    is computed. vegas_mult tilts only new-environment players; soft_mult comes from the (already
+    clamped) situation.soft_score. adjusted stays None when both factors are 1.0 -> the board
+    ranks on base. Returns the number of players given an adjusted value."""
+    avg = league_average(team_totals)
+    n = 0
+    for p in players:
+        vmult = 1.0
+        if team_totals and p.id in new_env_ids and p.team in team_totals:
+            vmult = vegas_multiplier(team_totals[p.team], avg)
+        soft = p.situation.soft_score if (p.situation and p.situation.soft_score is not None) else None
+        smult = soft if soft is not None else 1.0
+        if vmult != 1.0 or smult != 1.0:
+            p.projection.adjusted_points = round(p.projection.base_points * vmult * smult, 1)
+            n += 1
+        else:
+            p.projection.adjusted_points = None
+    return n

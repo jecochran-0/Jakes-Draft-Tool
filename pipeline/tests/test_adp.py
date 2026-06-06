@@ -47,3 +47,13 @@ def test_unmatched_player_gets_no_market():
     p = _player("Unknown Guy", "RB", 50)
     matched, _ = attach_market([p], payload)
     assert matched == 0 and p.market is None
+
+
+def test_value_vs_adp_null_beyond_draftable_bound():
+    from ffrank.adp import VALUE_VS_ADP_BOUND
+    payload = {"players": [{"name": "Deep Guy", "position": "WR", "adp": 140.0}]}
+    p = _player("Deep Guy", "WR", VALUE_VS_ADP_BOUND + 50)  # we rank him well outside draftable
+    attach_market([p], payload)
+    # adp / adp_rank still populated, but the misleading huge value_vs_adp is suppressed.
+    assert p.market.adp == 140.0 and p.market.adp_rank == 1
+    assert p.market.value_vs_adp is None

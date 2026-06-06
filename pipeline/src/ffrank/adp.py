@@ -26,6 +26,11 @@ from .schema import Market, Player
 SKILL_POSITIONS = {"QB", "RB", "WR", "TE"}
 FFC_URL = "https://fantasyfootballcalculator.com/api/v1/adp/{fmt}"
 
+# value_vs_adp = adp_rank - overall_rank is only meaningful among draftable players. Beyond this
+# overall-rank bound the gap is just "our model doesn't rate him" (e.g. a hyped rookie we rank
+# #700) — a huge, misleading magnitude — so we leave value_vs_adp null there (adp/adp_rank stay).
+VALUE_VS_ADP_BOUND = 200
+
 # Our ScoringConfig -> FFC format slug.
 FORMAT_SLUG = {"ppr": "ppr", "half": "half-ppr", "standard": "standard"}
 
@@ -80,7 +85,8 @@ def attach_market(players: list[Player], adp_payload: dict) -> tuple[int, int]:
         if hit is None:
             continue
         adp, adp_rank = hit
-        vva = (adp_rank - p.projection.overall_rank) if p.projection.overall_rank is not None else None
+        ovr = p.projection.overall_rank
+        vva = (adp_rank - ovr) if (ovr is not None and ovr <= VALUE_VS_ADP_BOUND) else None
         p.market = Market(adp=adp, adp_rank=adp_rank, value_vs_adp=vva)
         matched += 1
     return matched, len(rows)

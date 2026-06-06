@@ -1,6 +1,9 @@
-"""Vegas team-total derivation + join (offline; no network/key)."""
-from ffrank.schema import Player, Projection, RawStats
-from ffrank.vegas import attach_vegas, derive_team_totals
+"""Vegas team-total derivation + join + the targeted adjustment factor (offline)."""
+from dataclasses import dataclass
+
+from ffrank.schema import Player, Projection, RawStats, Situation
+from ffrank.vegas import (attach_vegas, derive_team_totals, finalize_adjusted, league_average,
+                          new_env_player_ids, vegas_multiplier)
 
 
 def _event(home, away, game_total, home_spread):
@@ -55,3 +58,54 @@ def test_attach_vegas_sets_situation():
     q = Player(id="y", name="Nobody", position="WR", team="ZZZ", is_rookie=False,
                raw_stats=RawStats(), projection=Projection(base_points=100.0))
     assert attach_vegas([q], {"DAL": 26.0}) == 0 and q.situation is None
+
+
+# ----- targeted Vegas factor (option B) -----------------------------------------------------
+
+@dataclass
+class _Hist:
+    player_id: str
+    is_rookie: bool = False
+    team: str = ""
+    last_stats_team: str | None = None
+
+
+def _player(pid, team, base=200.0, soft=None):
+    p = Player(id=pid, name=pid, position="WR", team=team, is_rookie=False,
+               raw_stats=RawStats(), projection=Projection(base_points=base))
+    if soft is not None:
+        p.situation = Situation(soft_score=soft)
+    return p
+
+
+def test_vegas_multiplier_clamped_and_centered():
+    assert vegas_multiplier(22.5, 22.5) == 1.0           # at average -> neutral
+    assert vegas_multiplier(30.0, 22.5) == 1.08          # high total -> clamped to +8%
+    assert vegas_multiplier(15.0, 22.5) == 0.92          # low total -> clamped to -8%
+    assert vegas_multiplier(24.0, None) == 1.0           # no average -> neutral
+
+
+def test_new_env_ids_rookies_and_team_changers_only():
+    hs = [
+        _Hist("rook", is_rookie=True, team="KC"),
+        _Hist("moved", team="NYJ", last_stats_team="GB"),     # changed teams
+        _Hist("stay", team="DET", last_stats_team="DET"),     # stayed put
+    ]
+    ids = new_env_player_ids(hs)
+    assert ids == {"rook", "moved"}
+
+
+def test_finalize_applies_vegas_only_to_new_env():
+    totals = {"BUF": 28.0, "CAR": 17.0}   # avg 22.5
+    moved = _player("moved", "BUF", base=200.0)   # team-changer to a high-total team
+    stay = _player("stay", "BUF", base=200.0)     # same high-total team, but stayed put
+    finalize_adjusted([moved, stay], totals, {"moved"})
+    assert moved.projection.adjusted_points == round(200.0 * 1.08, 1)   # +8% tilt
+    assert stay.projection.adjusted_points is None                       # untouched (no double-count)
+
+
+def test_finalize_composes_vegas_and_soft():
+    totals = {"BUF": 28.0, "CAR": 17.0}   # avg 22.5 -> BUF mult 1.08
+    p = _player("x", "BUF", base=200.0, soft=1.10)
+    finalize_adjusted([p], totals, {"x"})
+    assert p.projection.adjusted_points == round(200.0 * 1.08 * 1.10, 1)

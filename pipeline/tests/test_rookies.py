@@ -25,3 +25,11 @@ def test_rookie_opportunity_factor_scales():
     boosted = PlayerHistory("r2", "Rook2", "WR", age=22, is_rookie=True, seasons=[], draft_pick=20,
                             opportunity_factor=1.3)
     assert project_rookie(boosted) > project_rookie(base)
+
+
+def test_rookie_anchors_scale_with_format():
+    # A WR rookie is worth less without PPR; a QB rookie (no receptions) is unchanged.
+    wr = PlayerHistory("w", "WR Rook", "WR", age=22, is_rookie=True, seasons=[], draft_pick=5)
+    qb = PlayerHistory("q", "QB Rook", "QB", age=22, is_rookie=True, seasons=[], draft_pick=5)
+    assert project_rookie(wr, "standard") < project_rookie(wr, "half") < project_rookie(wr, "ppr")
+    assert project_rookie(qb, "standard") == project_rookie(qb, "ppr")

@@ -26,13 +26,14 @@ from .ranking import build_board
 from .schema import Contract, Meta, Player, Projection, RawStats
 from .softsignals import (apply_soft_scores, attach_situation, audit, emit_player_prompts,
                           load_soft_scores, load_team_table)
-from .vegas import attach_vegas, derive_team_totals, fetch_odds, has_api_key
+from .vegas import (attach_vegas, derive_team_totals, fetch_odds, finalize_adjusted,
+                    has_api_key, new_env_player_ids)
 
 OUTPUT_DIR = Path(__file__).resolve().parents[2] / "output"
 SKILL_POSITIONS = ["QB", "RB", "WR", "TE"]
 
 
-def _player_from_history(h: PlayerHistory) -> Player:
+def _player_from_history(h: PlayerHistory, scoring_key: str = "ppr") -> Player:
     seasons = sorted(h.seasons, key=lambda s: s.season)
     prior = [round(s.points, 1) for s in seasons]
     last = seasons[-1] if seasons else None
@@ -50,7 +51,7 @@ def _player_from_history(h: PlayerHistory) -> Player:
             target_share=round(h.last_target_share, 3) if h.last_target_share is not None else None,
             prior_seasons_points=prior,
         ),
-        projection=Projection(base_points=round(project_base_points(h), 1)),
+        projection=Projection(base_points=round(project_base_points(h, scoring_key), 1)),
     )
 
 
@@ -64,43 +65,48 @@ def build_contract(season: int, scoring_key: str = "ppr", with_adp: bool = True,
     if with_rookies:
         histories.extend(build_rookie_histories(season))
 
-    players = [_player_from_history(h) for h in histories]
+    players = [_player_from_history(h, scoring_key) for h in histories]
+    # Players whose current environment isn't in their stats (rookies + team-changers) get the
+    # Vegas tilt; stay-put veterans don't (their offense is already in base_points).
+    new_env_ids = new_env_player_ids(histories)
 
     # Situational inputs from the committed team table (LLM-independent: qb_tier, oc_change).
     team_table = load_team_table()
     attach_situation(players, team_table)
 
-    # Vegas team totals -> situation.vegas_team_total (before ranking; also a soft-signal input).
+    # Vegas team totals -> situation.vegas_team_total + the mechanical tilt below.
     # Only runs if THE_ODDS_API_KEY is set; offseason returns no games -> null. Never hard-fails.
+    team_totals: dict[str, float] = {}
     if with_vegas and has_api_key():
         try:
             events = fetch_odds()
-            totals = derive_team_totals(events)
-            n = attach_vegas(players, totals)
-            print(f"Vegas: {len(totals)} teams with totals from {len(events)} games -> set on {n} players"
+            team_totals = derive_team_totals(events)
+            n = attach_vegas(players, team_totals)
+            print(f"Vegas: {len(team_totals)} teams with totals from {len(events)} games -> set on {n} players"
                   + ("" if events else " (no games posted — offseason?)"))
         except (requests.RequestException, RuntimeError) as e:
             print(f"Vegas: fetch failed ({e}); vegas_team_total left null")
     elif with_vegas:
         print("Vegas: THE_ODDS_API_KEY not set; skipping (vegas_team_total left null)")
 
-    # Provisional board on base_points (also selects the top players for prompt emission).
-    build_board(players, DEFAULT_LEAGUE)
+    # Step C input: soft scores set situation.soft_score (adjusted is computed by finalize below).
+    if soft_scores_path:
+        scores = load_soft_scores(soft_scores_path)
+        applied = apply_soft_scores(players, scores)
+        print(f"Soft scores: applied {applied}/{len(scores)} (composed with Vegas into adjusted_points)")
 
-    # Step B: emit batched soft-signal prompts for the user to paste into Claude.
+    # Single place adjusted_points is set: base x targeted-Vegas x soft. Then rank on adjusted.
+    adjusted_n = finalize_adjusted(players, team_totals, new_env_ids)
+    build_board(players, DEFAULT_LEAGUE)
+    if adjusted_n:
+        _print_audit(players)
+
+    # Step B: emit batched soft-signal prompts (uses the current board + situation facts).
     if emit_prompts:
         out_dir = OUTPUT_DIR / "prompts"
         paths = emit_player_prompts(players, team_table, out_dir)
         print(f"Emitted {len(paths)} soft-signal prompt batches -> {out_dir}")
         print("Paste each into Claude; save the concatenated JSON arrays, then rerun with --soft-scores.")
-
-    # Step C: apply soft scores -> adjusted_points, then RE-RANK on adjusted (ranking_metric prefers it).
-    if soft_scores_path:
-        scores = load_soft_scores(soft_scores_path)
-        applied = apply_soft_scores(players, scores)
-        print(f"Soft scores: applied {applied}/{len(scores)} -> adjusted_points (board re-ranked on adjusted)")
-        build_board(players, DEFAULT_LEAGUE)
-        _print_audit(players)
 
     players.sort(key=lambda p: p.projection.overall_rank or 10**9)
 
@@ -134,17 +140,18 @@ def _soft_mark(p: Player) -> str:
 
 
 def _print_audit(players: list[Player]) -> None:
-    """Spec §9: surface the biggest base->adjusted moves with their reasoning for review."""
+    """Spec §9: surface the biggest base->adjusted moves (Vegas tilt and/or soft score)."""
     movers = audit(players)
     if not movers:
         return
-    print("\n=== SOFT-SIGNAL AUDIT — biggest base->adjusted moves ===")
+    print("\n=== ADJUSTMENT AUDIT — biggest base->adjusted moves (Vegas + soft) ===")
     for p in movers:
-        delta = p.projection.adjusted_points - p.projection.base_points
-        soft = p.situation.soft_score if p.situation else None
-        reason = (p.situation.soft_reasoning if p.situation else "") or ""
-        print(f"  {delta:+6.1f}  x{soft}  {p.name:22s} {p.position:2s}  "
-              f"{p.projection.base_points:.1f}->{p.projection.adjusted_points:.1f}  {reason}")
+        base, adj = p.projection.base_points, p.projection.adjusted_points
+        delta = adj - base
+        mult = adj / base if base else 1.0
+        reason = (p.situation.soft_reasoning if p.situation else "") or "Vegas team-total tilt"
+        print(f"  {delta:+6.1f}  x{mult:.3f}  {p.name:22s} {p.position:2s}  "
+              f"{base:.1f}->{adj:.1f}  {reason}")
     print()
 
 

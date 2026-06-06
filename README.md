@@ -68,8 +68,8 @@ job of the deferred **soft-signals** slice.
   never hard-fails) when the key is unset. `--no-vegas` forces skip.
 - Seasonality: per-game lines only exist preseason/in-season — a deep-offseason run returns no
   games and leaves totals null (expected). A pre-draft run in August picks up the early slate.
-- Stored now as a signal; it gets **factored into `adjusted_points`** in the soft-signals slice
-  (per spec §6b), which is intentionally last.
+- **Mechanically wired into `adjusted_points`** as a *targeted* factor — see the ranking-audit
+  note below.
 
 ```bash
 export THE_ODDS_API_KEY=your_key   # free tier at the-odds-api.com
@@ -95,13 +95,28 @@ python -m ffrank.rank --season 2026 --emit-prompts # -> output/prompts/soft_batc
 python -m ffrank.rank --season 2026 --soft-scores pipeline/data/soft_scores.json
 ```
 - `soft_score` **clamped to [0.85, 1.15]** in Python regardless of LLM output (stats lead, judgment nudges).
-- Vegas is an **LLM input fact only** (no separate multiplier) — resolves the §6b ambiguity.
 - **Audit (§9):** the run prints the biggest base→adjusted moves with their reasoning.
 - **LLM-off fallback (§9):** just omit `--soft-scores` → the board ranks on `base_points`.
 - `data/*.sample.json` show the exact shapes; real files are the user's Claude output (committable).
 
-**Part A (the projection pipeline) is now feature-complete** — all four headline views, plus the
-optional soft-signals layer. Remaining: the **Next.js app (Part B)**, paused mid-scaffold.
+### How the signals combine (ranking model)
+One number drives everything; each signal has a defined, non-overlapping job:
+- **`base_points`** = stats (veterans: recency/reliability-weighted per-game blend + age) or
+  draft capital (rookies, format-scaled). The foundation.
+- **`adjusted_points = base × vegas_mult × soft_mult`** — the single place adjustments combine:
+  - **Vegas** tilts (±8%, clamped) **only rookies + team-changers** — players whose current
+    environment *isn't* in their stats. Stay-put veterans are untouched (their offense is
+    already in `base_points`), so Vegas never double-counts.
+  - **soft_score** (manual LLM, clamped ±15%) handles scheme/coaching/QB/role. Vegas is *not* in
+    the LLM prompt, so the two layers don't overlap.
+- **VORP** (= ranking metric − positional replacement) makes positions comparable → `overall_rank`.
+  **Tiers** are gaps within position. **ADP** is a *comparison only* (`value_vs_adp`), never an input.
+
+If neither Vegas nor a soft score applies, `adjusted` stays null and the board ranks on `base_points`
+(the LLM-off fallback). Vegas is null in the deep offseason, so today's board is pure stats + scarcity.
+
+**Part A (the projection pipeline) is now feature-complete** — all four headline views, a cohesive
+adjustment layer, and the optional soft-signals step. Remaining: the **Next.js app (Part B)**.
 
 ## Quickstart
 

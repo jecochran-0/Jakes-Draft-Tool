@@ -33,7 +33,7 @@ TIER_DEPTH = 48         # players per position used to set the threshold (covers
 
 
 def ranking_metric(p: Player) -> float:
-    """The number we rank on: adjusted_points if available (soft-signals slice), else base."""
+    """The number we rank on: adjusted_points when set (Vegas tilt and/or soft score), else base."""
     adj = p.projection.adjusted_points
     return adj if adj is not None else p.projection.base_points
 

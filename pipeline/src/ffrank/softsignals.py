@@ -136,11 +136,14 @@ def _player_kind(p: Player) -> str:
 
 
 def situation_facts(p: Player, row: dict) -> str:
-    """The §7d per-player facts block fed under the system prompt."""
+    """The §7d per-player facts block fed under the system prompt.
+
+    Vegas team total is deliberately NOT included: it's applied mechanically in
+    vegas.finalize_adjusted (for rookies/team-changers). Putting it here too would double-count
+    it. The LLM's job is the rest — scheme fit, coaching/QB changes, role clarity.
+    """
     oc = "CHANGED" if row.get("oc_change") else "stable"
     scheme = row.get("scheme") or "n/a"
-    vegas = p.situation.vegas_team_total if p.situation else None
-    vegas_str = f"{vegas}" if vegas is not None else "n/a (no line posted yet)"
     tgt = p.raw_stats.target_share
     snap = p.raw_stats.snap_share
     tgt_str = f"{tgt:.0%}" if tgt is not None else "n/a"
@@ -152,7 +155,6 @@ def situation_facts(p: Player, row: dict) -> str:
         f"Situational facts:\n"
         f"- Offensive coordinator: {oc} (scheme: {scheme})\n"
         f"- QB tier (1=elite, 5=replacement): {row.get('qb_tier', 3)}\n"
-        f"- Vegas 2026 team total: {vegas_str}\n"
         f"- Role signals last year: snap share {snap_str}, target share {tgt_str}\n"
         f"- Team note: {row.get('notes') or 'n/a'}"
     )
@@ -207,7 +209,8 @@ def attach_situation(players: list[Player], table: dict[str, dict]) -> None:
 
 
 def apply_soft_scores(players: list[Player], scores: dict[str, tuple[float, str]]) -> int:
-    """Set soft_score/reasoning and adjusted_points = base × soft for matched players. Returns count."""
+    """Set soft_score/reasoning for matched players. adjusted_points is computed later by
+    vegas.finalize_adjusted (which composes soft x Vegas). Returns count matched."""
     n = 0
     for p in players:
         hit = scores.get(p.id)
@@ -218,7 +221,6 @@ def apply_soft_scores(players: list[Player], scores: dict[str, tuple[float, str]
             p.situation = Situation()
         p.situation.soft_score = soft
         p.situation.soft_reasoning = reasoning
-        p.projection.adjusted_points = round(p.projection.base_points * soft, 1)
         n += 1
     return n
 
