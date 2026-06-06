@@ -1,0 +1,25 @@
+# Python
+pipeline/.venv/
+__pycache__/
+*.pyc
+.pytest_cache/
+*.egg-info/
+
+# nflreadpy cache
+.nflreadpy_cache/
+**/nflverse_cache/
+
+# Pipeline outputs (generated; the canonical sample lives in schema/sample.json)
+pipeline/output/*.json
+pipeline/reports/*.md
+pipeline/reports/*.csv
+
+# Node / Next.js (Part B, later)
+app/node_modules/
+app/.next/
+app/out/
+
+# OS / editor
+.DS_Store
+.vscode/
+.idea/

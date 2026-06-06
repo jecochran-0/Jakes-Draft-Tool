@@ -1,0 +1,117 @@
+{
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "$id": "https://jakes-draft-tool/contract.schema.json",
+  "title": "Fantasy Draft Tool — JSON Contract (v1)",
+  "description": "Single file the Python pipeline (Part A) writes and the Next.js app (Part B) reads. One file per scoring format. Fields populated incrementally across build slices; later-slice fields are nullable but their keys are reserved here.",
+  "type": "object",
+  "required": ["meta", "players"],
+  "additionalProperties": false,
+  "properties": {
+    "meta": {
+      "type": "object",
+      "required": ["generated_at", "season", "scoring_config", "league_config"],
+      "additionalProperties": false,
+      "properties": {
+        "generated_at": { "type": "string", "format": "date-time" },
+        "season": { "type": "integer" },
+        "scoring_config": {
+          "type": "object",
+          "description": "Full scoring config (superset of the spec's 3-field example).",
+          "additionalProperties": true,
+          "properties": {
+            "ppr": { "type": "number" },
+            "pass_yd": { "type": "number" },
+            "pass_td": { "type": "number" },
+            "pass_int": { "type": "number" },
+            "rush_yd": { "type": "number" },
+            "rush_td": { "type": "number" },
+            "rec": { "type": "number" },
+            "rec_yd": { "type": "number" },
+            "rec_td": { "type": "number" },
+            "fumble_lost": { "type": "number" },
+            "two_pt": { "type": "number" }
+          }
+        },
+        "league_config": {
+          "type": "object",
+          "description": "League settings that key replacement levels / VORP.",
+          "additionalProperties": true,
+          "properties": {
+            "teams": { "type": "integer" },
+            "lineup": { "type": "object", "additionalProperties": { "type": "integer" } },
+            "flex_eligible": { "type": "array", "items": { "type": "string" } }
+          }
+        }
+      }
+    },
+    "players": {
+      "type": "array",
+      "items": { "$ref": "#/$defs/player" }
+    }
+  },
+  "$defs": {
+    "player": {
+      "type": "object",
+      "required": ["id", "name", "position", "team", "is_rookie", "raw_stats", "projection"],
+      "additionalProperties": false,
+      "properties": {
+        "id": { "type": "string", "description": "Stable id, e.g. 'sleeper_4046' or fallback 'gsis_00-0036223'." },
+        "name": { "type": "string" },
+        "position": { "type": "string", "enum": ["QB", "RB", "WR", "TE"] },
+        "team": { "type": "string" },
+        "age": { "type": ["number", "null"] },
+        "is_rookie": { "type": "boolean" },
+        "raw_stats": {
+          "type": "object",
+          "additionalProperties": false,
+          "properties": {
+            "last_season_points": { "type": ["number", "null"] },
+            "games_played": { "type": ["integer", "null"] },
+            "snap_share": { "type": ["number", "null"] },
+            "target_share": { "type": ["number", "null"] },
+            "prior_seasons_points": {
+              "type": "array",
+              "description": "Oldest-to-newest fantasy points (chosen scoring). Empty for rookies.",
+              "items": { "type": "number" }
+            }
+          }
+        },
+        "situation": {
+          "type": ["object", "null"],
+          "description": "Populated by the soft-signals slice (deferred).",
+          "additionalProperties": false,
+          "properties": {
+            "qb_tier": { "type": ["integer", "null"] },
+            "oc_change": { "type": ["boolean", "null"] },
+            "vegas_team_total": { "type": ["number", "null"] },
+            "soft_score": { "type": ["number", "null"], "minimum": 0.85, "maximum": 1.15 },
+            "soft_reasoning": { "type": ["string", "null"] }
+          }
+        },
+        "projection": {
+          "type": "object",
+          "required": ["base_points"],
+          "additionalProperties": false,
+          "properties": {
+            "base_points": { "type": "number", "description": "Stat blend (or rookie projection). LLM-off fallback ranker uses this." },
+            "adjusted_points": { "type": ["number", "null"], "description": "After soft_score + Vegas. Deferred slice." },
+            "vorp": { "type": ["number", "null"] },
+            "overall_rank": { "type": ["integer", "null"] },
+            "position_rank": { "type": ["integer", "null"] },
+            "tier": { "type": ["integer", "null"] }
+          }
+        },
+        "market": {
+          "type": ["object", "null"],
+          "description": "Populated by the ADP slice (deferred).",
+          "additionalProperties": false,
+          "properties": {
+            "adp": { "type": ["number", "null"] },
+            "adp_rank": { "type": ["integer", "null"] },
+            "value_vs_adp": { "type": ["integer", "null"], "description": "adp_rank - overall_rank. Positive = value/steal." }
+          }
+        }
+      }
+    }
+  }
+}

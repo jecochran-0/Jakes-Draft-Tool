@@ -1,0 +1,53 @@
+{
+  "meta": {
+    "generated_at": "2026-08-15T09:00:00Z",
+    "season": 2026,
+    "scoring_config": {
+      "ppr": 1.0, "pass_yd": 0.04, "pass_td": 4, "pass_int": -2,
+      "rush_yd": 0.1, "rush_td": 6, "rec": 1.0, "rec_yd": 0.1,
+      "rec_td": 6, "fumble_lost": -2, "two_pt": 2
+    },
+    "league_config": {
+      "teams": 12,
+      "lineup": { "QB": 1, "RB": 2, "WR": 2, "TE": 1, "FLEX": 1 },
+      "flex_eligible": ["RB", "WR", "TE"]
+    }
+  },
+  "players": [
+    {
+      "id": "sleeper_4046",
+      "name": "Bijan Robinson",
+      "position": "RB",
+      "team": "ATL",
+      "age": 24,
+      "is_rookie": false,
+      "raw_stats": {
+        "last_season_points": 285.4,
+        "games_played": 17,
+        "snap_share": 0.71,
+        "target_share": 0.14,
+        "prior_seasons_points": [215.0, 285.4]
+      },
+      "situation": {
+        "qb_tier": 3,
+        "oc_change": true,
+        "vegas_team_total": 24.5,
+        "soft_score": 1.06,
+        "soft_reasoning": "New OC runs a zone-heavy scheme that historically inflates RB volume; QB downgrade caps ceiling."
+      },
+      "projection": {
+        "base_points": 268.0,
+        "adjusted_points": 284.1,
+        "vorp": 92.3,
+        "overall_rank": 4,
+        "position_rank": 2,
+        "tier": 1
+      },
+      "market": {
+        "adp": 6.2,
+        "adp_rank": 6,
+        "value_vs_adp": 2
+      }
+    }
+  ]
+}

@@ -1,0 +1,27 @@
+[project]
+name = "ffrank"
+version = "0.1.0"
+description = "Fantasy football pre-draft ranking pipeline (Part A — offline)"
+requires-python = ">=3.10"
+dependencies = [
+    "nflreadpy>=0.1.5",
+    "polars>=1.0",
+    "pandas>=2.0",
+    "scipy>=1.11",
+    "pydantic>=2.0",
+    "requests>=2.31",
+]
+
+[project.optional-dependencies]
+dev = ["pytest>=8.0"]
+
+[build-system]
+requires = ["setuptools>=68"]
+build-backend = "setuptools.build_meta"
+
+[tool.setuptools.packages.find]
+where = ["src"]
+
+[tool.pytest.ini_options]
+pythonpath = ["src"]
+testpaths = ["tests"]
