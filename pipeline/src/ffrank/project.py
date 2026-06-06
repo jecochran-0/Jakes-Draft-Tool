@@ -38,15 +38,19 @@ POSITION_BASELINE_PG: dict[str, float] = {
     "TE": 5.0,
 }
 
-# Rough rookie base_points by draft capital bucket (overall pick), PPR full season.
-# A landing-spot opportunity factor scales these. Conservative anchors, not predictions.
-ROOKIE_DRAFT_CAPITAL: list[tuple[int, float]] = [
-    (10, 180.0),   # top-10 pick
-    (32, 150.0),   # rest of round 1
-    (64, 110.0),   # round 2
-    (100, 80.0),   # round 3
-    (256, 55.0),   # day 3
-]
+# Rookie base_points anchors by POSITION and draft-capital bucket (overall pick), full-season
+# PPR. Position-specific because year-1 fantasy value differs sharply: rookie RB/WR can be
+# immediately productive, rookie QBs score on a higher absolute scale (so a flat RB/WR anchor
+# would make startable rookie QBs look undraftable), and rookie TEs almost never produce.
+# These are conservative anchors, not predictions; a landing-spot opportunity_factor scales
+# them, and the deferred soft-signals/Vegas slices refine further.
+ROOKIE_BASE_BY_POS: dict[str, list[tuple[int, float]]] = {
+    "RB": [(10, 190.0), (32, 150.0), (64, 110.0), (100, 75.0), (256, 45.0)],
+    "WR": [(10, 175.0), (32, 140.0), (64, 100.0), (100, 70.0), (256, 40.0)],
+    "TE": [(10, 110.0), (32, 80.0), (64, 55.0), (100, 40.0), (256, 25.0)],
+    "QB": [(10, 250.0), (32, 210.0), (64, 150.0), (100, 90.0), (256, 50.0)],
+}
+_ROOKIE_FALLBACK = [(10, 175.0), (32, 140.0), (64, 100.0), (100, 70.0), (256, 40.0)]
 
 
 @dataclass
@@ -143,10 +147,11 @@ def project_veteran(p: PlayerHistory, games_target: int = SEASON_GAMES) -> float
 
 
 def project_rookie(p: PlayerHistory, games_target: int = SEASON_GAMES) -> float:
-    """Draft-capital prior scaled by landing-spot opportunity. (Vegas added later slice.)"""
+    """Position-aware draft-capital prior scaled by landing-spot opportunity. (Vegas later.)"""
     pick = p.draft_pick if p.draft_pick is not None else 256
-    base = ROOKIE_DRAFT_CAPITAL[-1][1]
-    for threshold, value in ROOKIE_DRAFT_CAPITAL:
+    anchors = ROOKIE_BASE_BY_POS.get(p.position, _ROOKIE_FALLBACK)
+    base = anchors[-1][1]
+    for threshold, value in anchors:
         if pick <= threshold:
             base = value
             break

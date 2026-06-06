@@ -50,9 +50,18 @@ job of the deferred **soft-signals** slice.
   breakout bets that the market drafts but the veteran stat-model ranks deep show large
   artifact magnitudes — the steals/reaches view bounds to our top 180 and counts the rest.
 
+### Slice 4 — Rookie projections ✅ (`ingest.build_rookie_histories`, `project.project_rookie`)
+- Incoming draft class from `load_draft_picks(season)` (skill positions), joined to
+  `ff_playerids` for sleeper id + age; `is_rookie=True`, tagged in the output and board.
+- **Position-aware** draft-capital anchors (year-1 fantasy value differs sharply by position):
+  rookie RB/WR can produce immediately, rookie QBs score on a higher scale, rookie TEs rarely
+  hit. Scaled by a neutral `opportunity_factor` (landing-spot/Vegas refinement deferred).
+- Rookies flow through the same VORP → ranks → tiers → ADP pipeline as veterans. The model
+  takes a conservative stat-anchored stance, so market-hyped rookies surface as ADP "reaches"
+  by design — the soft-signals slice is where situational role/landing-spot judgment is added.
+
 Deferred to later slices (fields reserved in the contract): Vegas team totals, hand-curated
-team-situation table, LLM soft-signals (prompt-emit + merge), rookie projections, and the
-Next.js app.
+team-situation table, LLM soft-signals (prompt-emit + merge), and the Next.js app.
 
 ## Quickstart
 

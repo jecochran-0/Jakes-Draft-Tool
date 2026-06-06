@@ -20,8 +20,8 @@ import requests
 
 from .adp import attach_market, fetch_adp
 from .config import CURRENT_SEASON, DEFAULT_LEAGUE, DEFAULT_SCORING
-from .ingest import build_histories
-from .project import project_base_points
+from .ingest import build_histories, build_rookie_histories
+from .project import PlayerHistory, project_base_points
 from .ranking import build_board
 from .schema import Contract, Meta, Player, Projection, RawStats
 
@@ -29,32 +29,37 @@ OUTPUT_DIR = Path(__file__).resolve().parents[2] / "output"
 SKILL_POSITIONS = ["QB", "RB", "WR", "TE"]
 
 
-def build_contract(season: int, with_adp: bool = True) -> Contract:
-    players: list[Player] = []
+def _player_from_history(h: PlayerHistory) -> Player:
+    seasons = sorted(h.seasons, key=lambda s: s.season)
+    prior = [round(s.points, 1) for s in seasons]
+    last = seasons[-1] if seasons else None
+    return Player(
+        id=h.player_id,
+        name=h.name,
+        position=h.position,  # type: ignore[arg-type]
+        team=h.team,
+        age=h.age,
+        is_rookie=h.is_rookie,
+        raw_stats=RawStats(
+            last_season_points=round(last.points, 1) if last else None,
+            games_played=last.games if last else None,
+            snap_share=round(h.last_snap_share, 3) if h.last_snap_share is not None else None,
+            target_share=round(h.last_target_share, 3) if h.last_target_share is not None else None,
+            prior_seasons_points=prior,
+        ),
+        projection=Projection(base_points=round(project_base_points(h), 1)),
+    )
+
+
+def build_contract(season: int, with_adp: bool = True, with_rookies: bool = True) -> Contract:
+    histories: list[PlayerHistory] = []
     for pos in SKILL_POSITIONS:
-        for h in build_histories(season, DEFAULT_SCORING, position=pos):
-            seasons = sorted(h.seasons, key=lambda s: s.season)
-            prior = [round(s.points, 1) for s in seasons]
-            last = seasons[-1] if seasons else None
-            base = round(project_base_points(h), 1)
-            players.append(
-                Player(
-                    id=h.player_id,
-                    name=h.name,
-                    position=h.position,  # type: ignore[arg-type]
-                    team=h.team,
-                    age=h.age,
-                    is_rookie=h.is_rookie,
-                    raw_stats=RawStats(
-                        last_season_points=round(last.points, 1) if last else None,
-                        games_played=last.games if last else None,
-                        snap_share=round(h.last_snap_share, 3) if h.last_snap_share is not None else None,
-                        target_share=round(h.last_target_share, 3) if h.last_target_share is not None else None,
-                        prior_seasons_points=prior,
-                    ),
-                    projection=Projection(base_points=base),
-                )
-            )
+        histories.extend(build_histories(season, DEFAULT_SCORING, position=pos))
+    if with_rookies:
+        histories.extend(build_rookie_histories(season))
+
+    players = [_player_from_history(h) for h in histories]
+
     # VORP -> overall/position ranks -> tiers (operates on base_points until soft signals land).
     build_board(players, DEFAULT_LEAGUE)
     players.sort(key=lambda p: p.projection.overall_rank or 10**9)
@@ -85,16 +90,18 @@ def main() -> None:
     ap.add_argument("--top", type=int, default=24)
     ap.add_argument("--no-write", action="store_true")
     ap.add_argument("--no-adp", action="store_true", help="skip the live ADP fetch (offline)")
+    ap.add_argument("--no-rookies", action="store_true", help="exclude incoming rookie class")
     args = ap.parse_args()
 
-    contract = build_contract(args.season, with_adp=not args.no_adp)
+    contract = build_contract(args.season, with_adp=not args.no_adp, with_rookies=not args.no_rookies)
 
     # Human-readable eyeball check.
     print(f"\nDraft board — {args.season} (Full PPR, 12-team; veterans only; rookies = later slice)\n")
-    print(f"=== OVERALL (VBD / VORP, top {args.top}) ===")
+    print(f"=== OVERALL (VBD / VORP, top {args.top}) — R = rookie ===")
     for p in contract.players[: args.top]:
         age = f"{p.age:.0f}" if p.age is not None else "??"
-        print(f"  {p.projection.overall_rank:3d}. {p.name:24s} {p.position:2s} {p.team:3s} "
+        flag = "R" if p.is_rookie else " "
+        print(f"  {p.projection.overall_rank:3d}.{flag} {p.name:24s} {p.position:2s} {p.team:3s} "
               f"age {age}  pts {p.projection.base_points:6.1f}  vorp {p.projection.vorp:6.1f}  T{p.projection.tier}")
     print()
 
@@ -103,10 +110,11 @@ def main() -> None:
         by_pos.setdefault(p.position, []).append(p)
     for pos in SKILL_POSITIONS:
         group = sorted(by_pos.get(pos, []), key=lambda p: p.projection.position_rank or 10**9)
-        print(f"=== {pos} (top {args.top}, by tier) ===")
+        print(f"=== {pos} (top {args.top}, by tier) — R = rookie ===")
         for p in group[: args.top]:
             age = f"{p.age:.0f}" if p.age is not None else "??"
-            print(f"  T{p.projection.tier} {p.projection.position_rank:2d}. {p.name:24s} {p.team:3s} "
+            flag = "R" if p.is_rookie else " "
+            print(f"  T{p.projection.tier} {p.projection.position_rank:2d}.{flag} {p.name:24s} {p.team:3s} "
                   f"age {age}  pts {p.projection.base_points:6.1f}  vorp {p.projection.vorp:6.1f}")
         print()
 

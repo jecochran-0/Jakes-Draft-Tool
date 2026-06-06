@@ -23,6 +23,19 @@ from .scoring import points as score_points
 
 SKILL_POSITIONS = ["QB", "RB", "WR", "TE"]
 
+# Draft-pick / PFR team abbreviations -> nflverse standard used elsewhere in the pipeline.
+_TEAM_FIX = {
+    "GNB": "GB", "KAN": "KC", "LVR": "LV", "NWE": "NE", "NOR": "NO",
+    "SFO": "SF", "TAM": "TB", "LAR": "LA", "SDG": "LAC", "STL": "LA", "OAK": "LV",
+}
+
+
+def _fix_team(team) -> str:
+    if not team:
+        return ""
+    return _TEAM_FIX.get(team, team)
+
+
 # Component columns we pass to scoring.points (must exist in player_stats).
 _SCORING_COLS = [
     "passing_yards", "passing_tds", "passing_interceptions", "passing_2pt_conversions",
@@ -46,6 +59,12 @@ def _players() -> pl.DataFrame:
 @lru_cache(maxsize=1)
 def _ff_ids() -> pl.DataFrame:
     return nfl.load_ff_playerids()
+
+
+@lru_cache(maxsize=4)
+def _draft_picks(season: int) -> pl.DataFrame:
+    df = nfl.load_draft_picks(seasons=[season])
+    return df.filter(pl.col("position").is_in(SKILL_POSITIONS))
 
 
 @lru_cache(maxsize=8)
@@ -155,6 +174,45 @@ def build_histories(
                 draft_pick=m.get("draft_pick"),
                 last_snap_share=snap_by_key.get((gsis_id, last["season"])),
                 last_target_share=last.get("target_share"),
+            )
+        )
+    return histories
+
+
+def build_rookie_histories(project_season: int, position: str | None = None) -> list[PlayerHistory]:
+    """Incoming-class rookies for `project_season`, projected from draft capital (§6a rookie branch).
+
+    Rookies have no prior-season production, so base_points comes from where they were drafted
+    (load_draft_picks) — the single best public predictor of rookie opportunity. We join
+    ff_playerids on the rookie-style gsis_id for the sleeper id (contract id) and age.
+    Landing-spot / Vegas refinements are deferred; opportunity_factor stays neutral (1.0).
+    """
+    dp = _draft_picks(project_season)
+    if position:
+        dp = dp.filter(pl.col("position") == position)
+
+    ff = _ff_ids().select(["gsis_id", "sleeper_id", "age"]).filter(pl.col("gsis_id").is_not_null())
+    ff_by_gsis = {r["gsis_id"]: r for r in ff.to_dicts()}
+
+    histories: list[PlayerHistory] = []
+    for r in dp.to_dicts():
+        gsis_id = r.get("gsis_id")
+        ffrow = ff_by_gsis.get(gsis_id, {})
+        sleeper_id = ffrow.get("sleeper_id")
+        age = ffrow.get("age") or r.get("age")
+        pid = _contract_id(gsis_id, sleeper_id) if gsis_id else f"draft_{project_season}_{r['pick']}"
+        histories.append(
+            PlayerHistory(
+                player_id=pid,
+                name=r.get("pfr_player_name") or "Unknown Rookie",
+                position=r["position"],
+                age=float(age) if age is not None else None,
+                gsis_id=gsis_id,
+                team=_fix_team(r.get("team")),
+                is_rookie=True,
+                seasons=[],
+                draft_pick=r.get("pick"),
+                opportunity_factor=1.0,
             )
         )
     return histories
