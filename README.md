@@ -36,9 +36,23 @@ job of the deferred **soft-signals** slice.
 - Ranks on `base_points` today; auto-switches to `adjusted_points` once soft signals land
   (`ranking.ranking_metric`). The output JSON now populates vorp/ranks/tier (100%).
 
-Deferred to later slices (fields reserved in the contract): Sleeper ADP + `value_vs_adp`
-(needs `overall_rank`, now available), Vegas team totals, hand-curated team-situation table,
-LLM soft-signals (prompt-emit + merge), and the Next.js app.
+### Slice 3 — ADP / value-vs-ADP ✅ (`pipeline/src/ffrank/adp.py`)
+- **`market` block**: `adp`, `adp_rank`, `value_vs_adp = adp_rank − overall_rank` (positive =
+  market drafts him later than we rank him = steal). Populated for the full ~150-player
+  draftable pool (152/153 matched by normalized name + position).
+- **Source deviation (per the spec's own VERIFY clause):** the spec named Sleeper, but Sleeper
+  has **no public ADP endpoint** (it gives leagues/drafts/players + stable ids only), and
+  nflreadpy's `load_ff_rankings` is ECR, not ADP. We use **FantasyFootballCalculator's** free,
+  no-key ADP API (PPR/Half/Standard, by team count) — real ADP over hundreds of drafts.
+- Runs at build time inside `ffrank.rank`; never hard-fails on a network error (market stays
+  null). `--no-adp` skips the fetch for fully-offline runs.
+- Known caveat: `value_vs_adp` is only meaningful for draftable players. Rookies / 2nd-year
+  breakout bets that the market drafts but the veteran stat-model ranks deep show large
+  artifact magnitudes — the steals/reaches view bounds to our top 180 and counts the rest.
+
+Deferred to later slices (fields reserved in the contract): Vegas team totals, hand-curated
+team-situation table, LLM soft-signals (prompt-emit + merge), rookie projections, and the
+Next.js app.
 
 ## Quickstart
 
