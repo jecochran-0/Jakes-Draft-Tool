@@ -24,6 +24,8 @@ from .ingest import build_histories, build_rookie_histories
 from .project import PlayerHistory, project_base_points
 from .ranking import build_board
 from .schema import Contract, Meta, Player, Projection, RawStats
+from .softsignals import (apply_soft_scores, attach_situation, audit, emit_player_prompts,
+                          load_soft_scores, load_team_table)
 from .vegas import attach_vegas, derive_team_totals, fetch_odds, has_api_key
 
 OUTPUT_DIR = Path(__file__).resolve().parents[2] / "output"
@@ -53,7 +55,8 @@ def _player_from_history(h: PlayerHistory) -> Player:
 
 
 def build_contract(season: int, with_adp: bool = True, with_rookies: bool = True,
-                   with_vegas: bool = True) -> Contract:
+                   with_vegas: bool = True, emit_prompts: bool = False,
+                   soft_scores_path: str | None = None) -> Contract:
     histories: list[PlayerHistory] = []
     for pos in SKILL_POSITIONS:
         histories.extend(build_histories(season, DEFAULT_SCORING, position=pos))
@@ -62,23 +65,12 @@ def build_contract(season: int, with_adp: bool = True, with_rookies: bool = True
 
     players = [_player_from_history(h) for h in histories]
 
-    # VORP -> overall/position ranks -> tiers (operates on base_points until soft signals land).
-    build_board(players, DEFAULT_LEAGUE)
-    players.sort(key=lambda p: p.projection.overall_rank or 10**9)
+    # Situational inputs from the committed team table (LLM-independent: qb_tier, oc_change).
+    team_table = load_team_table()
+    attach_situation(players, team_table)
 
-    # Live ADP join -> market block. Build step, not request time. Never hard-fail on network.
-    if with_adp:
-        try:
-            payload = fetch_adp(scoring_key="ppr", teams=DEFAULT_LEAGUE.teams)
-            matched, total = attach_market(players, payload)
-            meta_info = payload.get("meta", {})
-            print(f"ADP: matched {matched}/{total} skill players "
-                  f"({meta_info.get('total_drafts')} drafts, {meta_info.get('start_date')}..{meta_info.get('end_date')})")
-        except requests.RequestException as e:
-            print(f"ADP: fetch failed ({e}); market left null")
-
-    # Vegas team totals -> situation.vegas_team_total. Only runs if THE_ODDS_API_KEY is set.
-    # Offseason runs return no games (no per-game lines yet) -> left null. Never hard-fails.
+    # Vegas team totals -> situation.vegas_team_total (before ranking; also a soft-signal input).
+    # Only runs if THE_ODDS_API_KEY is set; offseason returns no games -> null. Never hard-fails.
     if with_vegas and has_api_key():
         try:
             events = fetch_odds()
@@ -91,6 +83,37 @@ def build_contract(season: int, with_adp: bool = True, with_rookies: bool = True
     elif with_vegas:
         print("Vegas: THE_ODDS_API_KEY not set; skipping (vegas_team_total left null)")
 
+    # Provisional board on base_points (also selects the top players for prompt emission).
+    build_board(players, DEFAULT_LEAGUE)
+
+    # Step B: emit batched soft-signal prompts for the user to paste into Claude.
+    if emit_prompts:
+        out_dir = OUTPUT_DIR / "prompts"
+        paths = emit_player_prompts(players, team_table, out_dir)
+        print(f"Emitted {len(paths)} soft-signal prompt batches -> {out_dir}")
+        print("Paste each into Claude; save the concatenated JSON arrays, then rerun with --soft-scores.")
+
+    # Step C: apply soft scores -> adjusted_points, then RE-RANK on adjusted (ranking_metric prefers it).
+    if soft_scores_path:
+        scores = load_soft_scores(soft_scores_path)
+        applied = apply_soft_scores(players, scores)
+        print(f"Soft scores: applied {applied}/{len(scores)} -> adjusted_points (board re-ranked on adjusted)")
+        build_board(players, DEFAULT_LEAGUE)
+        _print_audit(players)
+
+    players.sort(key=lambda p: p.projection.overall_rank or 10**9)
+
+    # Live ADP join -> market block (value_vs_adp uses the FINAL overall_rank). Never hard-fail.
+    if with_adp:
+        try:
+            payload = fetch_adp(scoring_key="ppr", teams=DEFAULT_LEAGUE.teams)
+            matched, total = attach_market(players, payload)
+            meta_info = payload.get("meta", {})
+            print(f"ADP: matched {matched}/{total} skill players "
+                  f"({meta_info.get('total_drafts')} drafts, {meta_info.get('start_date')}..{meta_info.get('end_date')})")
+        except requests.RequestException as e:
+            print(f"ADP: fetch failed ({e}); market left null")
+
     meta = Meta(
         generated_at=datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ"),
         season=season,
@@ -98,6 +121,30 @@ def build_contract(season: int, with_adp: bool = True, with_rookies: bool = True
         league_config=DEFAULT_LEAGUE,
     )
     return Contract(meta=meta, players=players)
+
+
+def _eff(p: Player) -> float:
+    """Effective projection used for ranking: adjusted_points if soft signals set it, else base."""
+    return p.projection.adjusted_points if p.projection.adjusted_points is not None else p.projection.base_points
+
+
+def _soft_mark(p: Player) -> str:
+    return "*" if p.projection.adjusted_points is not None else " "
+
+
+def _print_audit(players: list[Player]) -> None:
+    """Spec §9: surface the biggest base->adjusted moves with their reasoning for review."""
+    movers = audit(players)
+    if not movers:
+        return
+    print("\n=== SOFT-SIGNAL AUDIT — biggest base->adjusted moves ===")
+    for p in movers:
+        delta = p.projection.adjusted_points - p.projection.base_points
+        soft = p.situation.soft_score if p.situation else None
+        reason = (p.situation.soft_reasoning if p.situation else "") or ""
+        print(f"  {delta:+6.1f}  x{soft}  {p.name:22s} {p.position:2s}  "
+              f"{p.projection.base_points:.1f}->{p.projection.adjusted_points:.1f}  {reason}")
+    print()
 
 
 def main() -> None:
@@ -108,19 +155,24 @@ def main() -> None:
     ap.add_argument("--no-adp", action="store_true", help="skip the live ADP fetch (offline)")
     ap.add_argument("--no-rookies", action="store_true", help="exclude incoming rookie class")
     ap.add_argument("--no-vegas", action="store_true", help="skip the Vegas team-totals fetch")
+    ap.add_argument("--emit-prompts", action="store_true",
+                    help="write batched soft-signal prompts to output/prompts/ (step B)")
+    ap.add_argument("--soft-scores", metavar="FILE", default=None,
+                    help="apply pasted Claude soft scores and re-rank on adjusted_points (step C)")
     args = ap.parse_args()
 
     contract = build_contract(args.season, with_adp=not args.no_adp,
-                              with_rookies=not args.no_rookies, with_vegas=not args.no_vegas)
+                              with_rookies=not args.no_rookies, with_vegas=not args.no_vegas,
+                              emit_prompts=args.emit_prompts, soft_scores_path=args.soft_scores)
 
     # Human-readable eyeball check.
     print(f"\nDraft board — {args.season} (Full PPR, 12-team; veterans only; rookies = later slice)\n")
-    print(f"=== OVERALL (VBD / VORP, top {args.top}) — R = rookie ===")
+    print(f"=== OVERALL (VBD / VORP, top {args.top}) — R = rookie, * = soft-adjusted ===")
     for p in contract.players[: args.top]:
         age = f"{p.age:.0f}" if p.age is not None else "??"
         flag = "R" if p.is_rookie else " "
         print(f"  {p.projection.overall_rank:3d}.{flag} {p.name:24s} {p.position:2s} {p.team:3s} "
-              f"age {age}  pts {p.projection.base_points:6.1f}  vorp {p.projection.vorp:6.1f}  T{p.projection.tier}")
+              f"age {age}  pts {_eff(p):6.1f}{_soft_mark(p)} vorp {p.projection.vorp:6.1f}  T{p.projection.tier}")
     print()
 
     by_pos: dict[str, list[Player]] = {}
@@ -128,12 +180,12 @@ def main() -> None:
         by_pos.setdefault(p.position, []).append(p)
     for pos in SKILL_POSITIONS:
         group = sorted(by_pos.get(pos, []), key=lambda p: p.projection.position_rank or 10**9)
-        print(f"=== {pos} (top {args.top}, by tier) — R = rookie ===")
+        print(f"=== {pos} (top {args.top}, by tier) — R = rookie, * = soft-adjusted ===")
         for p in group[: args.top]:
             age = f"{p.age:.0f}" if p.age is not None else "??"
             flag = "R" if p.is_rookie else " "
             print(f"  T{p.projection.tier} {p.projection.position_rank:2d}.{flag} {p.name:24s} {p.team:3s} "
-                  f"age {age}  pts {p.projection.base_points:6.1f}  vorp {p.projection.vorp:6.1f}")
+                  f"age {age}  pts {_eff(p):6.1f}{_soft_mark(p)} vorp {p.projection.vorp:6.1f}")
         print()
 
     # Value vs ADP. Bound the display to draftable players: overall_rank runs to ~850 but ADP

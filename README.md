@@ -76,9 +76,32 @@ export THE_ODDS_API_KEY=your_key   # free tier at the-odds-api.com
 .venv/bin/python -m ffrank.rank --season 2026   # now populates vegas_team_total
 ```
 
-Deferred (fields reserved in the contract): hand-curated team-situation table + LLM
-soft-signals (prompt-emit → paste → merge) producing `adjusted_points` — **intentionally last**
-— and the Next.js app (Part B).
+### Slice 6 — Soft signals → adjusted_points ✅ (`pipeline/src/ffrank/softsignals.py`)
+Situational judgment (scheme, OC/QB changes, role) → a `soft_score` multiplier →
+`adjusted_points = base × soft_score` → the board **re-ranks on adjusted** (VORP/tiers already
+read it via `ranking.ranking_metric`). **Cost $0** — human-in-the-loop, no paid API.
+
+Three copy-paste steps (all free):
+```bash
+# A. draft the 32-team situation table
+python -m ffrank.softsignals draft-team-table     # -> output/prompts/team_table_prompt.txt
+# paste into Claude -> save JSON to pipeline/data/team_situations.json (see *.sample.json)
+
+# B. emit batched per-player prompts (system prompt §7c + facts, id-echo guardrail)
+python -m ffrank.rank --season 2026 --emit-prompts # -> output/prompts/soft_batch_1..N.txt
+# paste each into Claude -> concatenate JSON arrays into pipeline/data/soft_scores.json
+
+# C. apply, re-rank on adjusted, audit, write final JSON
+python -m ffrank.rank --season 2026 --soft-scores pipeline/data/soft_scores.json
+```
+- `soft_score` **clamped to [0.85, 1.15]** in Python regardless of LLM output (stats lead, judgment nudges).
+- Vegas is an **LLM input fact only** (no separate multiplier) — resolves the §6b ambiguity.
+- **Audit (§9):** the run prints the biggest base→adjusted moves with their reasoning.
+- **LLM-off fallback (§9):** just omit `--soft-scores` → the board ranks on `base_points`.
+- `data/*.sample.json` show the exact shapes; real files are the user's Claude output (committable).
+
+**Part A (the projection pipeline) is now feature-complete** — all four headline views, plus the
+optional soft-signals layer. Remaining: the **Next.js app (Part B)**, paused mid-scaffold.
 
 ## Quickstart
 

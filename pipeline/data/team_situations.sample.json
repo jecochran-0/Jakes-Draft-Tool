@@ -1,0 +1,5 @@
+[
+  { "team": "ATL", "qb_tier": 3, "oc_change": true,  "scheme": "zone-heavy run, play-action", "notes": "clear lead back; new OC inflates RB volume" },
+  { "team": "KC",  "qb_tier": 1, "oc_change": false, "scheme": "spread, motion-heavy",        "notes": "elite QB; target distribution can be volatile" },
+  { "team": "NO",  "qb_tier": 4, "oc_change": true,  "scheme": "run-leaning, condensed",      "notes": "QB downgrade caps passing-game ceiling" }
+]

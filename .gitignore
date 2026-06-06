@@ -11,8 +11,10 @@ __pycache__/
 
 # Pipeline outputs (generated; the canonical sample lives in schema/sample.json)
 pipeline/output/*.json
+pipeline/output/prompts/
 pipeline/reports/*.md
 pipeline/reports/*.csv
+# Note: pipeline/data/*.json (team_situations.json, soft_scores.json) IS committed (reproducibility)
 
 # Node / Next.js (Part B, later)
 app/node_modules/
