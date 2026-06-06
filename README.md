@@ -60,8 +60,25 @@ job of the deferred **soft-signals** slice.
   takes a conservative stat-anchored stance, so market-hyped rookies surface as ADP "reaches"
   by design — the soft-signals slice is where situational role/landing-spot judgment is added.
 
-Deferred to later slices (fields reserved in the contract): Vegas team totals, hand-curated
-team-situation table, LLM soft-signals (prompt-emit + merge), and the Next.js app.
+### Slice 5 — Vegas team totals ✅ (`pipeline/src/ffrank/vegas.py`)
+- The Odds API exposes **game** totals + spreads, so we derive the implied **team total**
+  (`game_total/2 − team_spread/2`), averaged over bookmakers and a team's posted games, mapped
+  to nflverse abbreviations. Populates `situation.vegas_team_total`.
+- Reads `THE_ODDS_API_KEY` from the environment; **skips gracefully** (leaves the field null,
+  never hard-fails) when the key is unset. `--no-vegas` forces skip.
+- Seasonality: per-game lines only exist preseason/in-season — a deep-offseason run returns no
+  games and leaves totals null (expected). A pre-draft run in August picks up the early slate.
+- Stored now as a signal; it gets **factored into `adjusted_points`** in the soft-signals slice
+  (per spec §6b), which is intentionally last.
+
+```bash
+export THE_ODDS_API_KEY=your_key   # free tier at the-odds-api.com
+.venv/bin/python -m ffrank.rank --season 2026   # now populates vegas_team_total
+```
+
+Deferred (fields reserved in the contract): hand-curated team-situation table + LLM
+soft-signals (prompt-emit → paste → merge) producing `adjusted_points` — **intentionally last**
+— and the Next.js app (Part B).
 
 ## Quickstart
 

@@ -24,6 +24,7 @@ from .ingest import build_histories, build_rookie_histories
 from .project import PlayerHistory, project_base_points
 from .ranking import build_board
 from .schema import Contract, Meta, Player, Projection, RawStats
+from .vegas import attach_vegas, derive_team_totals, fetch_odds, has_api_key
 
 OUTPUT_DIR = Path(__file__).resolve().parents[2] / "output"
 SKILL_POSITIONS = ["QB", "RB", "WR", "TE"]
@@ -51,7 +52,8 @@ def _player_from_history(h: PlayerHistory) -> Player:
     )
 
 
-def build_contract(season: int, with_adp: bool = True, with_rookies: bool = True) -> Contract:
+def build_contract(season: int, with_adp: bool = True, with_rookies: bool = True,
+                   with_vegas: bool = True) -> Contract:
     histories: list[PlayerHistory] = []
     for pos in SKILL_POSITIONS:
         histories.extend(build_histories(season, DEFAULT_SCORING, position=pos))
@@ -75,6 +77,20 @@ def build_contract(season: int, with_adp: bool = True, with_rookies: bool = True
         except requests.RequestException as e:
             print(f"ADP: fetch failed ({e}); market left null")
 
+    # Vegas team totals -> situation.vegas_team_total. Only runs if THE_ODDS_API_KEY is set.
+    # Offseason runs return no games (no per-game lines yet) -> left null. Never hard-fails.
+    if with_vegas and has_api_key():
+        try:
+            events = fetch_odds()
+            totals = derive_team_totals(events)
+            n = attach_vegas(players, totals)
+            print(f"Vegas: {len(totals)} teams with totals from {len(events)} games -> set on {n} players"
+                  + ("" if events else " (no games posted — offseason?)"))
+        except (requests.RequestException, RuntimeError) as e:
+            print(f"Vegas: fetch failed ({e}); vegas_team_total left null")
+    elif with_vegas:
+        print("Vegas: THE_ODDS_API_KEY not set; skipping (vegas_team_total left null)")
+
     meta = Meta(
         generated_at=datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ"),
         season=season,
@@ -91,9 +107,11 @@ def main() -> None:
     ap.add_argument("--no-write", action="store_true")
     ap.add_argument("--no-adp", action="store_true", help="skip the live ADP fetch (offline)")
     ap.add_argument("--no-rookies", action="store_true", help="exclude incoming rookie class")
+    ap.add_argument("--no-vegas", action="store_true", help="skip the Vegas team-totals fetch")
     args = ap.parse_args()
 
-    contract = build_contract(args.season, with_adp=not args.no_adp, with_rookies=not args.no_rookies)
+    contract = build_contract(args.season, with_adp=not args.no_adp,
+                              with_rookies=not args.no_rookies, with_vegas=not args.no_vegas)
 
     # Human-readable eyeball check.
     print(f"\nDraft board — {args.season} (Full PPR, 12-team; veterans only; rookies = later slice)\n")
