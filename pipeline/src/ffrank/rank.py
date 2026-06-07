@@ -24,8 +24,8 @@ from .ingest import build_histories, build_rookie_histories
 from .project import PlayerHistory, project_base_points
 from .ranking import build_board
 from .schema import Contract, Meta, Player, Projection, RawStats
-from .softsignals import (apply_soft_scores, attach_situation, audit, emit_player_prompts,
-                          load_soft_scores, load_team_table)
+from .softsignals import (apply_soft_scores, attach_situation, audit, compute_soft_scores,
+                          load_player_overrides, load_team_ratings)
 from .vegas import (attach_vegas, derive_team_totals, fetch_odds, finalize_adjusted,
                     has_api_key, new_env_player_ids)
 
@@ -57,7 +57,7 @@ def _player_from_history(h: PlayerHistory, scoring_key: str = "ppr") -> Player:
 
 def build_contract(season: int, scoring_key: str = "ppr", with_adp: bool = True,
                    with_rookies: bool = True, with_vegas: bool = True,
-                   emit_prompts: bool = False, soft_scores_path: str | None = None) -> Contract:
+                   with_soft: bool = True) -> Contract:
     scoring = scoring_for(scoring_key)
     histories: list[PlayerHistory] = []
     for pos in SKILL_POSITIONS:
@@ -70,9 +70,11 @@ def build_contract(season: int, scoring_key: str = "ppr", with_adp: bool = True,
     # Vegas tilt; stay-put veterans don't (their offense is already in base_points).
     new_env_ids = new_env_player_ids(histories)
 
-    # Situational inputs from the committed team table (LLM-independent: qb_tier, oc_change).
-    team_table = load_team_table()
-    attach_situation(players, team_table)
+    # Manual situational ratings (1-5) from the two committed files. attach_situation records the
+    # six factors on each player for display; compute applies the weighted multiplier below.
+    team_ratings = load_team_ratings()
+    player_overrides = load_player_overrides()
+    attach_situation(players, team_ratings, player_overrides)
 
     # Vegas team totals -> situation.vegas_team_total + the mechanical tilt below.
     # Only runs if THE_ODDS_API_KEY is set; offseason returns no games -> null. Never hard-fails.
@@ -89,24 +91,20 @@ def build_contract(season: int, scoring_key: str = "ppr", with_adp: bool = True,
     elif with_vegas:
         print("Vegas: THE_ODDS_API_KEY not set; skipping (vegas_team_total left null)")
 
-    # Step C input: soft scores set situation.soft_score (adjusted is computed by finalize below).
-    if soft_scores_path:
-        scores = load_soft_scores(soft_scores_path)
+    # Manual soft ratings -> per-player soft_score (only players with a net effect). Neutral
+    # ratings are a no-op, so this is safe to run unconditionally (the board reflects whatever
+    # is committed). --no-soft skips it entirely (ranks on base).
+    if with_soft:
+        scores = compute_soft_scores(players, team_ratings, player_overrides)
         applied = apply_soft_scores(players, scores)
-        print(f"Soft scores: applied {applied}/{len(scores)} (composed with Vegas into adjusted_points)")
+        if applied:
+            print(f"Soft signals: rated {applied} players (composed with Vegas into adjusted_points)")
 
     # Single place adjusted_points is set: base x targeted-Vegas x soft. Then rank on adjusted.
     adjusted_n = finalize_adjusted(players, team_totals, new_env_ids)
     build_board(players, DEFAULT_LEAGUE)
     if adjusted_n:
         _print_audit(players)
-
-    # Step B: emit batched soft-signal prompts (uses the current board + situation facts).
-    if emit_prompts:
-        out_dir = OUTPUT_DIR / "prompts"
-        paths = emit_player_prompts(players, team_table, out_dir)
-        print(f"Emitted {len(paths)} soft-signal prompt batches -> {out_dir}")
-        print("Paste each into Claude; save the concatenated JSON arrays, then rerun with --soft-scores.")
 
     players.sort(key=lambda p: p.projection.overall_rank or 10**9)
 
@@ -126,6 +124,7 @@ def build_contract(season: int, scoring_key: str = "ppr", with_adp: bool = True,
         season=season,
         scoring_config=scoring,
         league_config=DEFAULT_LEAGUE,
+        team_situations=team_ratings,
     )
     return Contract(meta=meta, players=players)
 
@@ -165,15 +164,13 @@ def main() -> None:
     ap.add_argument("--no-adp", action="store_true", help="skip the live ADP fetch (offline)")
     ap.add_argument("--no-rookies", action="store_true", help="exclude incoming rookie class")
     ap.add_argument("--no-vegas", action="store_true", help="skip the Vegas team-totals fetch")
-    ap.add_argument("--emit-prompts", action="store_true",
-                    help="write batched soft-signal prompts to output/prompts/ (step B)")
-    ap.add_argument("--soft-scores", metavar="FILE", default=None,
-                    help="apply pasted Claude soft scores and re-rank on adjusted_points (step C)")
+    ap.add_argument("--no-soft", action="store_true",
+                    help="ignore the manual soft ratings and rank on base_points")
     args = ap.parse_args()
 
     contract = build_contract(args.season, scoring_key=args.scoring, with_adp=not args.no_adp,
                               with_rookies=not args.no_rookies, with_vegas=not args.no_vegas,
-                              emit_prompts=args.emit_prompts, soft_scores_path=args.soft_scores)
+                              with_soft=not args.no_soft)
 
     # Human-readable eyeball check.
     print(f"\nDraft board — {args.season} (Full PPR, 12-team; veterans only; rookies = later slice)\n")

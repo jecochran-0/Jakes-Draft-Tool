@@ -11,15 +11,17 @@ __pycache__/
 
 # Pipeline outputs (generated; the canonical sample lives in schema/sample.json)
 pipeline/output/*.json
-pipeline/output/prompts/
 pipeline/reports/*.md
 pipeline/reports/*.csv
-# Note: pipeline/data/*.json (team_situations.json, soft_scores.json) IS committed (reproducibility)
+# Note: pipeline/data/*.json (team_situations.json, player_overrides.json) IS committed (reproducibility)
 
-# Node / Next.js (Part B, later)
+# Node / Next.js (Part B)
 app/node_modules/
 app/.next/
 app/out/
+
+# Claude Code local-only settings (launch.json is committed for the preview server)
+.claude/settings.local.json
 
 # OS / editor
 .DS_Store

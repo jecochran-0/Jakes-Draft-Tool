@@ -39,6 +39,9 @@ class Meta(BaseModel):
     season: int
     scoring_config: ScoringConfig
     league_config: LeagueConfig
+    # Hand-rated team-situation table (team -> {qb, ol, scheme, pace, notes}); each factor is
+    # 1-5 (5=best, 3=neutral). Drives the team-wide half of the soft-signal multiplier.
+    team_situations: dict[str, dict] = Field(default_factory=dict)
 
 
 class RawStats(BaseModel):
@@ -53,6 +56,8 @@ class Situation(BaseModel):
     qb_tier: Optional[int] = None
     oc_change: Optional[bool] = None
     vegas_team_total: Optional[float] = None
+    # The six manual 1-5 ratings behind soft_score (qb, ol, scheme, pace, role, competition).
+    soft_factors: Optional[dict[str, int]] = None
     soft_score: Optional[float] = None
     soft_reasoning: Optional[str] = None
 

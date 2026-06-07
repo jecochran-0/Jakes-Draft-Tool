@@ -4,7 +4,7 @@ Pre-draft fantasy football ranking tool for skill positions (QB/RB/WR/TE). Two p
 communicate through one JSON file (`schema/contract.schema.json`):
 
 - **Part A — `pipeline/`** (Python, offline): nflverse data → projected fantasy points → JSON.
-- **Part B — `app/`** (Next.js, later slice): renders the four views from the JSON.
+- **Part B — `app/`** (Next.js + Tailwind): "Draft Room" — renders the four views from the JSON.
 
 All four outputs (overall ranks, positional tiers, projected points, value-vs-ADP) are views
 over **one number per player: projected fantasy points.** One projection engine; four views.
@@ -77,27 +77,25 @@ export THE_ODDS_API_KEY=your_key   # free tier at the-odds-api.com
 ```
 
 ### Slice 6 — Soft signals → adjusted_points ✅ (`pipeline/src/ffrank/softsignals.py`)
-Situational judgment (scheme, OC/QB changes, role) → a `soft_score` multiplier →
-`adjusted_points = base × soft_score` → the board **re-ranks on adjusted** (VORP/tiers already
-read it via `ranking.ranking_metric`). **Cost $0** — human-in-the-loop, no paid API.
+Situational judgment → a `soft_score` multiplier → `adjusted_points = base × soft_score` → the
+board **re-ranks on adjusted** (VORP/tiers already read it via `ranking.ranking_metric`).
+**Cost $0** — you rate the factors by hand, no paid API.
 
-Three copy-paste steps (all free):
+You rate **six non-overlapping factors 1–5** (5=best, 3=neutral) in the app's Soft Signals studio:
+team-wide **QB / OL / scheme / pace** and per-player **role / target-competition**. Each rating's
+deviation from 3 is weighted by a **position-specific table that sums to 0.15** (`FACTOR_WEIGHTS`),
+so OL drives RBs, QB drives WR/TE, and a factor is zeroed where it doesn't apply.
 ```bash
-# A. draft the 32-team situation table
-python -m ffrank.softsignals draft-team-table     # -> output/prompts/team_table_prompt.txt
-# paste into Claude -> save JSON to pipeline/data/team_situations.json (see *.sample.json)
-
-# B. emit batched per-player prompts (system prompt §7c + facts, id-echo guardrail)
-python -m ffrank.rank --season 2026 --emit-prompts # -> output/prompts/soft_batch_1..N.txt
-# paste each into Claude -> concatenate JSON arrays into pipeline/data/soft_scores.json
-
-# C. apply, re-rank on adjusted, audit, write final JSON
-python -m ffrank.rank --season 2026 --soft-scores pipeline/data/soft_scores.json
+# Edit ratings in the app -> Download -> save into pipeline/data/:
+#   team_situations.json   [{team, qb, ol, scheme, pace, notes}]
+#   player_overrides.json  [{id, role, competition}]
+python -m ffrank.rank --season 2026          # applies committed ratings, re-ranks, audits
+python -m ffrank.rank --season 2026 --no-soft  # ignore ratings, rank on base_points
 ```
-- `soft_score` **clamped to [0.85, 1.15]** in Python regardless of LLM output (stats lead, judgment nudges).
+- `soft_score` **clamped to [0.85, 1.15]** (stats lead, judgment nudges).
 - **Audit (§9):** the run prints the biggest base→adjusted moves with their reasoning.
-- **LLM-off fallback (§9):** just omit `--soft-scores` → the board ranks on `base_points`.
-- `data/*.sample.json` show the exact shapes; real files are the user's Claude output (committable).
+- **Signals-off fallback (§9):** all-neutral ratings (or `--no-soft`) → the board ranks on `base_points`.
+- `data/*.sample.json` show the exact shapes; real files are your committed ratings.
 
 ### How the signals combine (ranking model)
 One number drives everything; each signal has a defined, non-overlapping job:
@@ -107,16 +105,38 @@ One number drives everything; each signal has a defined, non-overlapping job:
   - **Vegas** tilts (±8%, clamped) **only rookies + team-changers** — players whose current
     environment *isn't* in their stats. Stay-put veterans are untouched (their offense is
     already in `base_points`), so Vegas never double-counts.
-  - **soft_score** (manual LLM, clamped ±15%) handles scheme/coaching/QB/role. Vegas is *not* in
-    the LLM prompt, so the two layers don't overlap.
+  - **soft_score** (manual 1–5 factor ratings, clamped ±15%) handles QB/OL/scheme/pace/role/
+    competition. Vegas isn't one of the rated factors, so the two layers don't overlap.
 - **VORP** (= ranking metric − positional replacement) makes positions comparable → `overall_rank`.
   **Tiers** are gaps within position. **ADP** is a *comparison only* (`value_vs_adp`), never an input.
 
 If neither Vegas nor a soft score applies, `adjusted` stays null and the board ranks on `base_points`
-(the LLM-off fallback). Vegas is null in the deep offseason, so today's board is pure stats + scarcity.
+(the signals-off fallback). Vegas is null in the deep offseason, so an unrated board is pure stats + scarcity.
 
-**Part A (the projection pipeline) is now feature-complete** — all four headline views, a cohesive
-adjustment layer, and the optional soft-signals step. Remaining: the **Next.js app (Part B)**.
+### Part B — "Draft Room" web app ✅ (`app/`)
+Next.js (App Router) + Tailwind, mobile-first dark **mossy-green** design. Reads the committed
+JSON and renders all four views:
+- **Overall** — value-based board (rank, position rank, projected pts, VORP, ADP, value chip).
+- **By Position** — QB/RB/WR/TE with tier dividers.
+- **Values** — biggest steals and reaches vs ADP.
+- **Soft Signals** — in-app $0 rating studio: you rate six situational factors **1–5** (team-wide
+  QB/OL/scheme/pace + per-player role/competition), see live base→adjusted moves, and download
+  `team_situations.json` + `player_overrides.json` for `make board`. (Re-ranking stays in the
+  Python pipeline — the app edits ratings and previews; it doesn't fork the ranking logic.)
+- **Player detail drawer** — base→adjusted, recent-production sparkline, usage bars, situation, market.
+
+```bash
+cd app && npm install && npm run dev      # http://localhost:3000
+npm run build                              # static export, deploys to Vercel as-is
+
+# Refresh the app's data from a pipeline run (top 300 by overall rank):
+python3 -c "import json; d=json.load(open('../pipeline/output/rankings_2026_ppr.json')); \
+p=[x for x in d['players'] if (x['projection']['overall_rank'] or 999)<=300]; \
+json.dump({'meta':d['meta'],'players':p}, open('data/rankings.json','w'))"
+```
+
+**Both parts are now complete.** Part A is the offline projection pipeline; Part B is the
+deployable board that reads its JSON.
 
 ## Quickstart
 

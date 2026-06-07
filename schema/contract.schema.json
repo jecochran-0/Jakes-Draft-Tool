@@ -41,6 +41,21 @@
             "lineup": { "type": "object", "additionalProperties": { "type": "integer" } },
             "flex_eligible": { "type": "array", "items": { "type": "string" } }
           }
+        },
+        "team_situations": {
+          "type": "object",
+          "description": "Hand-rated team -> team-wide soft factors (1-5, 5=best, 3=neutral).",
+          "additionalProperties": {
+            "type": "object",
+            "additionalProperties": true,
+            "properties": {
+              "qb": { "type": "integer", "minimum": 1, "maximum": 5 },
+              "ol": { "type": "integer", "minimum": 1, "maximum": 5 },
+              "scheme": { "type": "integer", "minimum": 1, "maximum": 5 },
+              "pace": { "type": "integer", "minimum": 1, "maximum": 5 },
+              "notes": { "type": "string" }
+            }
+          }
         }
       }
     },
@@ -78,12 +93,17 @@
         },
         "situation": {
           "type": ["object", "null"],
-          "description": "Populated by the soft-signals slice (deferred).",
+          "description": "Soft-signals: the six manual 1-5 factor ratings + the derived multiplier.",
           "additionalProperties": false,
           "properties": {
             "qb_tier": { "type": ["integer", "null"] },
             "oc_change": { "type": ["boolean", "null"] },
             "vegas_team_total": { "type": ["number", "null"] },
+            "soft_factors": {
+              "type": ["object", "null"],
+              "description": "qb, ol, scheme, pace, role, competition — each 1-5 (5=best, 3=neutral).",
+              "additionalProperties": { "type": "integer", "minimum": 1, "maximum": 5 }
+            },
             "soft_score": { "type": ["number", "null"], "minimum": 0.85, "maximum": 1.15 },
             "soft_reasoning": { "type": ["string", "null"] }
           }

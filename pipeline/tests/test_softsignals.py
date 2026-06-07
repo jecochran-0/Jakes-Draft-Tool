@@ -1,11 +1,11 @@
-"""Soft signals (spec §6b/§7/§8) — offline."""
+"""Soft signals (spec §6b/§7/§8) — manual 1-5 ratings -> multiplier. Offline."""
 import json
 
 from ffrank.ranking import build_board
 from ffrank.schema import LeagueConfig, Player, Projection, RawStats
-from ffrank.softsignals import (SYSTEM_PROMPT, apply_soft_scores, attach_situation, audit,
-                                emit_player_prompts, load_soft_scores, load_team_table,
-                                situation_facts, team_row)
+from ffrank.softsignals import (apply_soft_scores, attach_situation, audit, compute_soft_scores,
+                                load_player_overrides, load_team_ratings, player_ratings,
+                                soft_for_ratings)
 from ffrank.vegas import finalize_adjusted
 
 
@@ -17,71 +17,103 @@ def _p(pid, name, pos, team, base, rank=None, rookie=False):
     return p
 
 
-def test_load_soft_scores_clamps_and_keys_by_id(tmp_path):
-    f = tmp_path / "scores.json"
-    f.write_text(json.dumps([
-        {"id": "a", "soft_score": 1.30, "soft_reasoning": "too high -> clamp"},
-        {"id": "b", "soft_score": 0.50, "soft_reasoning": "too low -> clamp"},
-        {"id": "c", "soft_score": 1.05, "soft_reasoning": "ok"},
-        {"id": "d"},  # missing score -> ignored
-    ]))
-    scores = load_soft_scores(f)
-    assert scores["a"][0] == 1.15 and scores["b"][0] == 0.85 and scores["c"][0] == 1.05
-    assert "d" not in scores
+# ----- loading ---------------------------------------------------------------------------
+
+def test_load_team_ratings_defaults_missing_factors(tmp_path):
+    f = tmp_path / "team.json"
+    f.write_text(json.dumps([{"team": "ATL", "ol": 5, "notes": "good line"}]))
+    table = load_team_ratings(f)
+    assert table["ATL"]["ol"] == 5
+    assert table["ATL"]["qb"] == 3 and table["ATL"]["scheme"] == 3 and table["ATL"]["pace"] == 3
+    assert table["ATL"]["notes"] == "good line"
 
 
-def test_apply_sets_soft_fields_only():
-    # apply_soft_scores sets soft_score/reasoning; finalize_adjusted computes adjusted_points.
-    players = [_p("a", "A", "RB", "ATL", 200.0), _p("b", "B", "RB", "ATL", 200.0)]
-    n = apply_soft_scores(players, {"a": (1.10, "expanded role")})
-    assert n == 1
-    assert players[0].situation.soft_score == 1.10
-    assert players[0].situation.soft_reasoning == "expanded role"
-    assert players[0].projection.adjusted_points is None  # not set yet
-    finalize_adjusted(players, {}, set())                 # no Vegas; soft only
-    assert players[0].projection.adjusted_points == 220.0
-    assert players[1].projection.adjusted_points is None   # unscored -> ranks on base
+def test_load_player_overrides(tmp_path):
+    f = tmp_path / "ovr.json"
+    f.write_text(json.dumps([{"id": "a", "role": 5}, {"id": "b", "competition": 1}]))
+    ovr = load_player_overrides(f)
+    assert ovr["a"]["role"] == 5 and ovr["a"]["competition"] == 3   # missing -> neutral
+    assert ovr["b"]["competition"] == 1
 
 
-def test_adjusted_drives_ranking():
-    # Identical base; the boosted player must out-rank the faded one after finalize + re-rank.
+def test_player_ratings_merges_team_and_player():
+    p = _p("a", "A", "RB", "ATL", 200.0)
+    r = player_ratings(p, {"ATL": {"ol": 5}}, {"a": {"role": 4}})
+    assert r["ol"] == 5 and r["role"] == 4
+    assert r["qb"] == 3 and r["scheme"] == 3 and r["pace"] == 3 and r["competition"] == 3
+
+
+# ----- the model -------------------------------------------------------------------------
+
+def test_neutral_ratings_are_a_no_op():
+    players = [_p("a", "A", "RB", "ATL", 200.0)]
+    assert compute_soft_scores(players, {}, {}) == {}            # nothing rated -> empty
+    assert compute_soft_scores(players, {"ATL": {"ol": 3}}, {"a": {"role": 3}}) == {}  # all neutral
+
+
+def test_maxed_ratings_hit_the_bounds():
+    rb = _p("a", "A", "RB", "ATL", 200.0)
+    team_max = {"ATL": {"qb": 5, "ol": 5, "scheme": 5, "pace": 5}}
+    assert soft_for_ratings(player_ratings(rb, team_max, {"a": {"role": 5, "competition": 5}}), "RB") == 1.15
+    team_min = {"ATL": {"qb": 1, "ol": 1, "scheme": 1, "pace": 1}}
+    assert soft_for_ratings(player_ratings(rb, team_min, {"a": {"role": 1, "competition": 1}}), "RB") == 0.85
+
+
+def test_position_weighting_ol_moves_rb_not_wr():
+    # OL is weighted for RBs (0.05) but zero for WRs -> identical OL rating moves only the RB.
+    rb = _p("a", "Back", "RB", "ATL", 200.0)
+    wr = _p("b", "Wide", "WR", "ATL", 200.0)
+    scores = compute_soft_scores([rb, wr], {"ATL": {"ol": 5}}, {})
+    assert scores["a"][0] == 1.05            # 0.05 * (5-3)/2 = +0.05
+    assert "b" not in scores                 # OL weight is 0 for WR -> no net effect
+
+
+def test_player_override_lifts_that_player():
+    rb = _p("a", "A", "RB", "ATL", 200.0)
+    scores = compute_soft_scores([rb], {}, {"a": {"role": 5}})
+    assert scores["a"][0] == 1.04            # 0.04 * (5-3)/2 = +0.04
+
+
+def test_reasoning_names_the_driving_factors():
+    rb = _p("a", "A", "RB", "ATL", 200.0)
+    scores = compute_soft_scores([rb], {"ATL": {"ol": 5}}, {"a": {"competition": 1}})
+    reasoning = scores["a"][1]
+    assert "OL 5/5" in reasoning and "lift" in reasoning
+    assert "competition 1/5" in reasoning and "drag" in reasoning
+
+
+def test_compute_then_apply_drives_ranking():
     a = _p("a", "Boosted", "WR", "ATL", 200.0)
     b = _p("b", "Faded", "WR", "ATL", 200.0)
-    pool = [a, b] + [_p(f"x{i}", f"X{i}", "WR", "ATL", 150 - i) for i in range(40)]
-    apply_soft_scores(pool, {"a": (1.15, "elite fit"), "b": (0.85, "lost role")})
+    pool = [a, b] + [_p(f"x{i}", f"X{i}", "WR", "BUF", 150 - i) for i in range(40)]
+    team = {"ATL": {}}  # ATL neutral; the per-player overrides do the work
+    overrides = {"a": {"role": 5, "competition": 5}, "b": {"role": 1, "competition": 1}}
+    scores = compute_soft_scores(pool, team, overrides)
+    apply_soft_scores(pool, scores)
     finalize_adjusted(pool, {}, set())
     build_board(pool, LeagueConfig())
     assert a.projection.overall_rank < b.projection.overall_rank
 
 
-def test_emit_batches_and_id_echo(tmp_path):
-    players = [_p(f"id{i}", f"P{i}", "RB", "ATL", 200 - i, rank=i + 1) for i in range(100)]
-    paths = emit_player_prompts(players, {}, tmp_path, batch_size=45, limit=100)
-    assert len(paths) == 3  # 45 + 45 + 10
-    first = paths[0].read_text()
-    assert SYSTEM_PROMPT.split("\n", 1)[0] in first          # system prompt present
-    assert "id: id0" in first and "id: id44" in first        # id echoes present
-    assert "id: id45" not in first                            # batch boundary respected
+# ----- attach / apply / audit ------------------------------------------------------------
+
+def test_attach_situation_records_soft_factors():
+    players = [_p("a", "A", "RB", "ATL", 200.0)]
+    attach_situation(players, {"ATL": {"ol": 5, "qb": 2}}, {"a": {"role": 4}})
+    sf = players[0].situation.soft_factors
+    assert sf == {"qb": 2, "ol": 5, "scheme": 3, "pace": 3, "role": 4, "competition": 3}
 
 
-def test_team_table_defaults_and_facts(tmp_path):
-    f = tmp_path / "team.json"
-    f.write_text(json.dumps([{"team": "ATL", "qb_tier": 2, "oc_change": True,
-                              "scheme": "zone run", "notes": "lead back clear"}]))
-    table = load_team_table(f)
-    assert table["ATL"]["qb_tier"] == 2 and table["ATL"]["oc_change"] is True
-    assert team_row(table, "ZZZ")["qb_tier"] == 3  # missing -> neutral default
-
-    p = _p("a", "Bijan", "RB", "ATL", 280.0)
-    facts = situation_facts(p, table["ATL"])
-    assert "id: a" in facts and "Bijan" in facts
-    assert "CHANGED" in facts and "QB tier" in facts and "zone run" in facts
-
-
-def test_attach_situation_copies_table():
-    players = [_p("a", "A", "QB", "BUF", 300.0)]
-    attach_situation(players, {"BUF": {"qb_tier": 1, "oc_change": False, "scheme": "", "notes": ""}})
-    assert players[0].situation.qb_tier == 1 and players[0].situation.oc_change is False
+def test_apply_sets_soft_fields_only():
+    players = [_p("a", "A", "RB", "ATL", 200.0), _p("b", "B", "RB", "ATL", 200.0)]
+    n = apply_soft_scores(players, {"a": (1.10, "expanded role")})
+    assert n == 1
+    assert players[0].situation.soft_score == 1.10
+    assert players[0].situation.soft_reasoning == "expanded role"
+    assert players[0].projection.adjusted_points is None  # not set until finalize
+    finalize_adjusted(players, {}, set())
+    assert players[0].projection.adjusted_points == 220.0
+    assert players[1].projection.adjusted_points is None   # unscored -> ranks on base
 
 
 def test_audit_orders_by_absolute_move():

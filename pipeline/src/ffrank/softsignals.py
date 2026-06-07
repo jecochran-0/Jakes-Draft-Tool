@@ -1,17 +1,17 @@
-"""Soft signals (spec §6b, §7, §8) — $0 human-in-the-loop LLM adjustment.
+"""Soft signals (spec §6b, §7, §8) — manual situational ratings, fully offline.
 
-Situational judgment the stats can't see (scheme fit, coaching/OC changes, QB quality, role)
-becomes a per-player `soft_score` multiplier: adjusted_points = base_points × soft_score. The
-board then re-ranks on adjusted_points (ranking.ranking_metric already prefers it).
+Situational judgment the stats can't see (QB, offensive line, scheme/coaching, pace, the player's
+role, target/touch competition) is entered BY HAND on a 1-5 scale and turned into a per-player
+`soft_score` multiplier: adjusted_points = base_points × soft_score. The board then re-ranks on
+adjusted_points (ranking.ranking_metric already prefers it).
 
-Cost = $0: the pipeline EMITS prompts; the user pastes them into a Claude chat and pastes the
-JSON back. Three steps (see README / module functions):
-  A. draft_team_table_prompt()  -> Claude drafts pipeline/data/team_situations.json (~32 rows)
-  B. emit_player_prompts()       -> batched per-player prompts -> Claude -> data/soft_scores.json
-  C. load_soft_scores()+apply_soft_scores() -> adjusted_points -> re-rank
+Two committed inputs under pipeline/data/ (edited in the app's Soft Signals studio, then saved):
+  - team_situations.json  -> [{team, qb, ol, scheme, pace, notes}]   (team-wide factors, 1-5)
+  - player_overrides.json -> [{id, role, competition}]               (player factors, 1-5)
 
-Decisions: Vegas is an LLM INPUT fact only (no separate multiplier); soft_score is clamped to
-[0.85, 1.15] in Python regardless of what the LLM returned.
+Scale: 5 = best, 3 = neutral (no effect), 1 = worst. Each factor's deviation from 3 is weighted
+by a position-specific table and summed; the result is clamped to [0.85, 1.15]. A player with all
+factors neutral nets zero and is left unscored (ranks on base) — the LLM-off fallback equivalent.
 """
 from __future__ import annotations
 
@@ -19,198 +19,141 @@ import json
 from pathlib import Path
 
 from .schema import Player, Situation
-from .vegas import TEAM_ABBR
 
 DATA_DIR = Path(__file__).resolve().parents[2] / "data"
 TEAM_TABLE_PATH = DATA_DIR / "team_situations.json"
-
-NFL_TEAMS = sorted(set(TEAM_ABBR.values()))
+PLAYER_OVERRIDES_PATH = DATA_DIR / "player_overrides.json"
 
 SOFT_MIN, SOFT_MAX = 0.85, 1.15
+NEUTRAL = 3  # 1-5 scale; 3 = neutral / no effect.
 
-# Neutral defaults for any team missing from the curated table.
-_NEUTRAL_TEAM = {"qb_tier": 3, "oc_change": False, "scheme": "", "notes": ""}
+# The six non-overlapping factors. Four are team-wide (one rating per team), two are per player.
+TEAM_FACTORS = ("qb", "ol", "scheme", "pace")
+PLAYER_FACTORS = ("role", "competition")
+FACTORS = TEAM_FACTORS + PLAYER_FACTORS
 
-# The analyst prompt — spec §7c, verbatim. Reused unchanged across every batch.
-SYSTEM_PROMPT = """\
-You are a fantasy football projection analyst. Your job is to assess
-SITUATIONAL factors that raw statistics miss, and output a single
-multiplier that adjusts a player's stat-based point projection.
+# Human labels for the auto-generated reasoning string.
+FACTOR_LABEL = {
+    "qb": "QB", "ol": "OL", "scheme": "scheme", "pace": "pace",
+    "role": "role", "competition": "competition",
+}
 
-You are NOT projecting points. A separate model already did that from
-historical stats (for veterans) or draft capital and opportunity (for
-rookies). Your ONLY job is to capture what the numbers can't see:
-scheme fit, coaching changes, QB quality changes, and role changes.
+# Position-specific weights — the max swing each factor can contribute. Each row SUMS TO 0.15,
+# so "everything maxed" lands exactly on the ±15% bound (clamp is then only a safety net).
+# Tunable: this table is the single source of truth (mirrored in app/lib/softsignals.ts).
+FACTOR_WEIGHTS: dict[str, dict[str, float]] = {
+    # qb is 0 for RB (their own passing doesn't matter); OL leads, role close behind.
+    "RB": {"qb": 0.000, "ol": 0.050, "scheme": 0.025, "pace": 0.015, "role": 0.040, "competition": 0.020},
+    # OL barely matters for a WR; QB and target competition lead.
+    "WR": {"qb": 0.045, "ol": 0.000, "scheme": 0.030, "pace": 0.020, "role": 0.020, "competition": 0.035},
+    "TE": {"qb": 0.040, "ol": 0.000, "scheme": 0.035, "pace": 0.020, "role": 0.035, "competition": 0.020},
+    # For a QB the "qb" factor is themselves (0); competition = quality of weapons; OL = protection.
+    "QB": {"qb": 0.000, "ol": 0.045, "scheme": 0.040, "pace": 0.030, "role": 0.015, "competition": 0.020},
+}
 
-## Output format
-Respond with ONLY valid JSON, no preamble, no markdown. Return one
-object per player. Echo the exact `id` you were given. Return ALL
-players — do not skip any.
-
-[
-  { "id": "<echoed id>",
-    "soft_score": <number between 0.85 and 1.15>,
-    "soft_reasoning": "<one sentence, max 25 words, citing the
-     specific factor(s) driving the adjustment>" }
-]
-
-## The multiplier scale
-- 1.00 = neutral. Situation neither helps nor hurts beyond what stats
-  already reflect. THIS IS YOUR DEFAULT. Most players are near 1.00.
-- 1.01-1.07 = modest positive (good scheme fit, stable QB upgrade,
-  expanded role).
-- 1.08-1.15 = strong positive. RESERVE for clear, specific reasons
-  (vacated 70%+ of team targets, elite scheme fit). This is the ceiling.
-- 0.93-0.99 = modest negative (QB downgrade, new committee).
-- 0.85-0.92 = strong negative. Reserve for clear reasons (lost starting
-  role, major QB downgrade, scheme actively misfits the player).
-
-## Hard rules
-- NEVER output below 0.85 or above 1.15. Absolute bounds.
-- Default to 1.00 when factors are mixed, unclear, or absent. Do not
-  manufacture an adjustment to seem useful. 1.00 is a valid, common,
-  correct answer.
-- Base the score ONLY on the situational facts provided. Do NOT use
-  outside knowledge of the player's stats or reputation — the stat
-  model already accounts for production.
-- Offsetting factors should net toward 1.00 (a scheme upgrade plus a
-  QB downgrade is roughly neutral).
-- Reasoning must name the specific factor, not be generic.
-  Good: "New OC's zone-heavy scheme inflates RB volume."
-  Bad: "Good situation this year."
-
-## For ROOKIES specifically
-The stat model gave this player a base projection from draft capital
-and depth-chart opportunity. Your multiplier should reflect scheme fit
-and role clarity ONLY — do not re-reward draft capital (already counted)
-or penalize the simple fact of being a rookie (already counted).
-"""
-
-
-# ----- Team-situation table (step A) -----------------------------------------------------
-
-def load_team_table(path: Path = TEAM_TABLE_PATH) -> dict[str, dict]:
-    """team abbrev -> {qb_tier, oc_change, scheme, notes}. Neutral defaults for missing teams."""
-    table: dict[str, dict] = {}
-    if path.exists():
-        rows = json.loads(path.read_text())
-        for r in rows:
-            team = r.get("team")
-            if team:
-                table[team] = {**_NEUTRAL_TEAM, **{k: r.get(k, _NEUTRAL_TEAM[k]) for k in _NEUTRAL_TEAM}}
-    return table
-
-
-def team_row(table: dict[str, dict], team: str) -> dict:
-    return table.get(team, _NEUTRAL_TEAM)
-
-
-def draft_team_table_prompt() -> str:
-    """Prompt for Claude to draft the 32-team situation table (step A). Strict JSON out."""
-    teams = ", ".join(NFL_TEAMS)
-    return f"""\
-You are building a fantasy-football team-situation reference table for the 2026 NFL season.
-For EACH of the 32 teams below, assess the SLOW-MOVING situational facts that matter for
-fantasy projections. Output ONLY a valid JSON array, no preamble, no markdown.
-
-Teams (echo the exact abbreviation): {teams}
-
-For each team return:
-{{
-  "team": "<abbrev>",
-  "qb_tier": <integer 1-5, 1=elite (MVP-caliber), 3=average starter, 5=replacement/uncertain>,
-  "oc_change": <true if the offensive coordinator/play-caller changed this offseason, else false>,
-  "scheme": "<short phrase, e.g. 'zone-heavy run, play-action' or 'spread air-raid'>",
-  "notes": "<one short clause on any role/scheme context that affects skill players>"
-}}
-
-Return all 32 teams. Base it on the most current information you have; if uncertain on a team,
-use qb_tier 3, oc_change false, and say so in notes. JSON array only.
-"""
-
-
-# ----- Per-player prompts (step B) -------------------------------------------------------
-
-def _player_kind(p: Player) -> str:
-    return "Rookie" if p.is_rookie else "Veteran"
-
-
-def situation_facts(p: Player, row: dict) -> str:
-    """The §7d per-player facts block fed under the system prompt.
-
-    Vegas team total is deliberately NOT included: it's applied mechanically in
-    vegas.finalize_adjusted (for rookies/team-changers). Putting it here too would double-count
-    it. The LLM's job is the rest — scheme fit, coaching/QB changes, role clarity.
-    """
-    oc = "CHANGED" if row.get("oc_change") else "stable"
-    scheme = row.get("scheme") or "n/a"
-    tgt = p.raw_stats.target_share
-    snap = p.raw_stats.snap_share
-    tgt_str = f"{tgt:.0%}" if tgt is not None else "n/a"
-    snap_str = f"{snap:.0%}" if snap is not None else "n/a"
-    age = f"{p.age:.0f}" if p.age is not None else "n/a"
-    return (
-        f"id: {p.id}\n"
-        f"Player: {p.name} | {p.position} | {p.team} | Age {age} | {_player_kind(p)}\n"
-        f"Situational facts:\n"
-        f"- Offensive coordinator: {oc} (scheme: {scheme})\n"
-        f"- QB tier (1=elite, 5=replacement): {row.get('qb_tier', 3)}\n"
-        f"- Role signals last year: snap share {snap_str}, target share {tgt_str}\n"
-        f"- Team note: {row.get('notes') or 'n/a'}"
-    )
-
-
-def emit_player_prompts(players: list[Player], table: dict[str, dict], out_dir: Path,
-                        batch_size: int = 45, limit: int = 200) -> list[Path]:
-    """Write batched prompt files for the top `limit` players (by overall_rank). Returns paths."""
-    out_dir.mkdir(parents=True, exist_ok=True)
-    ranked = sorted(players, key=lambda p: p.projection.overall_rank or 10**9)[:limit]
-    batches = [ranked[i:i + batch_size] for i in range(0, len(ranked), batch_size)]
-    paths: list[Path] = []
-    for n, batch in enumerate(batches, 1):
-        facts = "\n\n".join(situation_facts(p, team_row(table, p.team)) for p in batch)
-        body = (
-            f"{SYSTEM_PROMPT}\n\n"
-            f"## Players to score — batch {n} of {len(batches)} ({len(batch)} players)\n\n"
-            f"{facts}\n"
-        )
-        path = out_dir / f"soft_batch_{n}.txt"
-        path.write_text(body)
-        paths.append(path)
-    return paths
-
-
-# ----- Merge scores (step C) -------------------------------------------------------------
 
 def _clamp(x: float) -> float:
     return max(SOFT_MIN, min(SOFT_MAX, x))
 
 
-def load_soft_scores(path: Path) -> dict[str, tuple[float, str]]:
-    """Parse the pasted [{id, soft_score, soft_reasoning}] array; clamp scores; key by id."""
-    rows = json.loads(Path(path).read_text())
-    scores: dict[str, tuple[float, str]] = {}
-    for r in rows:
-        pid = r.get("id")
-        if pid is None or r.get("soft_score") is None:
+# ----- Load the two committed rating files ----------------------------------------------
+
+def load_team_ratings(path: Path = TEAM_TABLE_PATH) -> dict[str, dict]:
+    """team abbrev -> {qb, ol, scheme, pace, notes}. Missing factors default to NEUTRAL."""
+    table: dict[str, dict] = {}
+    if Path(path).exists():
+        for r in json.loads(Path(path).read_text()):
+            team = r.get("team")
+            if not team:
+                continue
+            row = {f: int(r.get(f, NEUTRAL)) for f in TEAM_FACTORS}
+            row["notes"] = r.get("notes", "")
+            table[team] = row
+    return table
+
+
+def load_player_overrides(path: Path = PLAYER_OVERRIDES_PATH) -> dict[str, dict]:
+    """player id -> {role, competition}. Missing factors default to NEUTRAL."""
+    overrides: dict[str, dict] = {}
+    if Path(path).exists():
+        for r in json.loads(Path(path).read_text()):
+            pid = r.get("id")
+            if not pid:
+                continue
+            overrides[pid] = {f: int(r.get(f, NEUTRAL)) for f in PLAYER_FACTORS}
+    return overrides
+
+
+def player_ratings(p: Player, team_ratings: dict[str, dict],
+                   player_overrides: dict[str, dict]) -> dict[str, int]:
+    """The six 1-5 ratings for a player: team factors from its team + its player overrides."""
+    trow = team_ratings.get(p.team, {})
+    orow = player_overrides.get(p.id, {})
+    ratings = {f: int(trow.get(f, NEUTRAL)) for f in TEAM_FACTORS}
+    ratings.update({f: int(orow.get(f, NEUTRAL)) for f in PLAYER_FACTORS})
+    return ratings
+
+
+# ----- The model -------------------------------------------------------------------------
+
+def _reasoning(ratings: dict[str, int], weights: dict[str, float]) -> str:
+    """One-line summary naming only the factors that actually move the score (weight > 0)."""
+    lifts, drags = [], []
+    for f in FACTORS:
+        if ratings[f] == NEUTRAL or weights.get(f, 0.0) == 0.0:
             continue
-        scores[pid] = (_clamp(float(r["soft_score"])), r.get("soft_reasoning", ""))
+        chip = f"{FACTOR_LABEL[f]} {ratings[f]}/5"
+        (lifts if ratings[f] > NEUTRAL else drags).append(chip)
+    parts = []
+    if lifts:
+        parts.append(", ".join(lifts) + " lift")
+    if drags:
+        parts.append(", ".join(drags) + " drag")
+    return "; ".join(parts)
+
+
+def soft_for_ratings(ratings: dict[str, int], position: str) -> float:
+    """Position-weighted multiplier from the six ratings, clamped to [0.85, 1.15]."""
+    weights = FACTOR_WEIGHTS.get(position, {})
+    raw = sum(weights.get(f, 0.0) * (ratings[f] - NEUTRAL) / 2 for f in FACTORS)
+    return round(_clamp(1.0 + raw), 4)
+
+
+def compute_soft_scores(players: list[Player], team_ratings: dict[str, dict],
+                        player_overrides: dict[str, dict]) -> dict[str, tuple[float, str]]:
+    """id -> (soft_score, reasoning) for every player whose ratings have a NET effect.
+
+    Players with all-neutral (or only zero-weight) ratings are omitted, so they stay unscored
+    and rank on base_points — the same fallback behavior as 'no soft scores provided'."""
+    scores: dict[str, tuple[float, str]] = {}
+    for p in players:
+        ratings = player_ratings(p, team_ratings, player_overrides)
+        weights = FACTOR_WEIGHTS.get(p.position, {})
+        raw = sum(weights.get(f, 0.0) * (ratings[f] - NEUTRAL) / 2 for f in FACTORS)
+        if abs(raw) < 1e-9:
+            continue  # no net effect -> leave on base
+        scores[p.id] = (round(_clamp(1.0 + raw), 4), _reasoning(ratings, weights))
     return scores
 
 
-def attach_situation(players: list[Player], table: dict[str, dict]) -> None:
-    """Copy qb_tier / oc_change from the team table onto each player's situation (LLM-independent)."""
+# ----- Attach / apply --------------------------------------------------------------------
+
+def attach_situation(players: list[Player], team_ratings: dict[str, dict],
+                     player_overrides: dict[str, dict]) -> None:
+    """Record each player's six ratings on situation.soft_factors (for the app/contract display).
+    Players with all-neutral ratings are left untouched to keep the output clean."""
     for p in players:
-        row = team_row(table, p.team)
+        ratings = player_ratings(p, team_ratings, player_overrides)
+        if all(v == NEUTRAL for v in ratings.values()):
+            continue
         if p.situation is None:
             p.situation = Situation()
-        p.situation.qb_tier = row.get("qb_tier")
-        p.situation.oc_change = bool(row.get("oc_change"))
+        p.situation.soft_factors = ratings
 
 
 def apply_soft_scores(players: list[Player], scores: dict[str, tuple[float, str]]) -> int:
     """Set soft_score/reasoning for matched players. adjusted_points is computed later by
-    vegas.finalize_adjusted (which composes soft x Vegas). Returns count matched."""
+    vegas.finalize_adjusted (which composes soft × Vegas). Returns count matched."""
     n = 0
     for p in players:
         hit = scores.get(p.id)
@@ -226,29 +169,7 @@ def apply_soft_scores(players: list[Player], scores: dict[str, tuple[float, str]
 
 
 def audit(players: list[Player], top: int = 15) -> list[Player]:
-    """Biggest LLM movers by |adjusted − base| (spec §9), for human review of outliers."""
+    """Biggest movers by |adjusted − base| (spec §9), for human review of outliers."""
     moved = [p for p in players if p.projection.adjusted_points is not None]
     moved.sort(key=lambda p: abs(p.projection.adjusted_points - p.projection.base_points), reverse=True)
     return moved[:top]
-
-
-# ----- CLI: step A (draft the team table) ------------------------------------------------
-
-def main() -> None:
-    import argparse
-
-    ap = argparse.ArgumentParser(description="Soft-signals helpers (step A: draft the team table)")
-    ap.add_argument("command", choices=["draft-team-table"])
-    ap.parse_args()
-
-    out_dir = Path(__file__).resolve().parents[2] / "output" / "prompts"
-    out_dir.mkdir(parents=True, exist_ok=True)
-    path = out_dir / "team_table_prompt.txt"
-    path.write_text(draft_team_table_prompt())
-    print(f"Wrote team-table draft prompt -> {path}")
-    print("Paste it into a Claude chat, then save the JSON array to:")
-    print(f"  {TEAM_TABLE_PATH}")
-
-
-if __name__ == "__main__":
-    main()
