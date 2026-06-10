@@ -42,6 +42,8 @@ class Meta(BaseModel):
     # Hand-rated team-situation table (team -> {qb, ol, scheme, pace, notes}); each factor is
     # 1-5 (5=best, 3=neutral). Drives the team-wide half of the soft-signal multiplier.
     team_situations: dict[str, dict] = Field(default_factory=dict)
+    # Which market ADP source the `market` block came from: "espn" (default) or "ffc".
+    adp_source: Optional[str] = None
 
 
 class RawStats(BaseModel):

@@ -4,12 +4,13 @@ import { useMemo, useState } from "react";
 import { POSITIONS, POSITION_COLOR, tierColor } from "@/lib/format";
 import type { Contract, Player, Position } from "@/lib/types";
 import { Header } from "./Header";
+import { MockDraft } from "./MockDraft";
 import { PlayerDetail } from "./PlayerDetail";
 import { PlayerRow } from "./PlayerRow";
 import { SoftSignals } from "./SoftSignals";
 import { Pill } from "./ui";
 
-type View = "overall" | "position" | "values" | "soft";
+type View = "overall" | "position" | "values" | "soft" | "mock";
 
 export function DraftRoom({ data }: { data: Contract }) {
   const players = data.players;
@@ -17,6 +18,8 @@ export function DraftRoom({ data }: { data: Contract }) {
   const [pos, setPos] = useState<Position>("RB");
   const [query, setQuery] = useState("");
   const [selected, setSelected] = useState<Player | null>(null);
+
+  const adpLabel = data.meta.adp_source === "espn" ? "ESPN" : data.meta.adp_source === "ffc" ? "FFC" : "the market";
 
   const q = query.trim().toLowerCase();
   const byName = (p: Player) => !q || p.name.toLowerCase().includes(q);
@@ -60,6 +63,9 @@ export function DraftRoom({ data }: { data: Contract }) {
           <Pill active={view === "soft"} onClick={() => setView("soft")}>
             Soft Signals
           </Pill>
+          <Pill active={view === "mock"} onClick={() => setView("mock")}>
+            Mock
+          </Pill>
         </div>
 
         {view === "position" && (
@@ -93,12 +99,14 @@ export function DraftRoom({ data }: { data: Contract }) {
 
         {view === "values" && (
           <div className="space-y-6">
-            <ValueGroup title="Best values" subtitle="We rank them earlier than the market drafts them" players={steals} onPick={setSelected} />
-            <ValueGroup title="Biggest reaches" subtitle="Market drafts them earlier than we rank them" players={reaches} onPick={setSelected} />
+            <ValueGroup title="Best values" subtitle={`We rank them earlier than ${adpLabel} drafts them`} players={steals} onPick={setSelected} />
+            <ValueGroup title="Biggest reaches" subtitle={`${adpLabel} drafts them earlier than we rank them`} players={reaches} onPick={setSelected} />
           </div>
         )}
 
         {view === "soft" && <SoftSignals players={players} teamSituations={data.meta.team_situations} />}
+
+        {view === "mock" && <MockDraft players={players} meta={data.meta} />}
       </div>
 
       <PlayerDetail player={selected} onClose={() => setSelected(null)} />

@@ -40,10 +40,12 @@ job of the deferred **soft-signals** slice.
 - **`market` block**: `adp`, `adp_rank`, `value_vs_adp = adp_rank − overall_rank` (positive =
   market drafts him later than we rank him = steal). Populated for the full ~150-player
   draftable pool (152/153 matched by normalized name + position).
-- **Source deviation (per the spec's own VERIFY clause):** the spec named Sleeper, but Sleeper
-  has **no public ADP endpoint** (it gives leagues/drafts/players + stable ids only), and
-  nflreadpy's `load_ff_rankings` is ECR, not ADP. We use **FantasyFootballCalculator's** free,
-  no-key ADP API (PPR/Half/Standard, by team count) — real ADP over hundreds of drafts.
+- **Market source: ESPN by default** (`espn_adp.py`) so the board, `value_vs_adp`, and the app's
+  mock-draft bots reflect an **ESPN** draft — live ADP in draft season, ESPN's published draft rank
+  in the offseason. Falls back to **FantasyFootballCalculator** (`adp.py`, free no-key, PPR/Half/
+  Standard) if ESPN is unreachable. `--adp-source espn|ffc` picks; `meta.adp_source` records it.
+- **Source deviation (per the spec's own VERIFY clause):** the spec named Sleeper, but Sleeper has
+  **no public ADP endpoint** and nflreadpy's `load_ff_rankings` is ECR, not ADP — hence FFC/ESPN.
 - Runs at build time inside `ffrank.rank`; never hard-fails on a network error (market stays
   null). `--no-adp` skips the fetch for fully-offline runs.
 - Known caveat: `value_vs_adp` is only meaningful for draftable players. Rookies / 2nd-year

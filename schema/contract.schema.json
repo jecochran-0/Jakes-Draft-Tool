@@ -42,6 +42,7 @@
             "flex_eligible": { "type": "array", "items": { "type": "string" } }
           }
         },
+        "adp_source": { "type": ["string", "null"], "description": "Market ADP source for the `market` block: 'espn' (default) or 'ffc'." },
         "team_situations": {
           "type": "object",
           "description": "Hand-rated team -> team-wide soft factors (1-5, 5=best, 3=neutral).",

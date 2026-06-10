@@ -19,8 +19,12 @@ The contract is `schema/contract.schema.json`. Lock it first; both parts hang of
 - **Part A — `pipeline/`** (Python, offline): nflverse data → projected points → JSON. The
   pipeline is **offline/committed**, never run on a server (Vercel only serves the static JSON).
 - **Part B — `app/`** (Next.js App Router + Tailwind, "Draft Room"): renders the JSON. Built.
-  Mobile-first dark mossy-green UI; three views (Overall / By Position / Values) + a player
-  detail drawer. Reads `app/data/rankings.json` (a top-300 trim of a pipeline run, committed).
+  Mobile-first dark mossy-green UI; five views (Overall / By Position / Values / Soft Signals /
+  Mock) + a player detail drawer. **Mock** (`MockDraft.tsx` + pure engine `app/lib/mockdraft.ts`)
+  is an interactive pick-by-pick draft vs ADP-driven need-aware bots, with a recommended pick,
+  sim-to-end, and a results screen (projected finish + value/reach) — all client-side bookkeeping
+  over the committed board (no re-projection; the engine is reused by a future Live Draft Mode).
+  Reads `app/data/rankings.json` (a top-300 trim of a pipeline run, committed).
   `cd app && npm run dev` (port 3000) / `npm run build` (static, Vercel-ready). Design tokens in
   `app/tailwind.config.ts`; contract types in `app/lib/types.ts`; helpers in `app/lib/format.ts`.
 
@@ -85,7 +89,8 @@ get `src/` via `pyproject.toml`'s `pythonpath`, so `make test` needs no env.
 `config` (league/scoring/replacement rule) · `schema` (pydantic ↔ contract) · `probe` (runtime
 nflreadpy column probe) · `ingest` (nflreadpy → `PlayerHistory`, vets + rookies) · `scoring`
 (component stats × `ScoringConfig` → points; matches nflverse `fantasy_points_ppr`) · `project`
-(`base_points` engine) · `ranking` (VORP/ranks/tiers) · `adp` (FFC → market block) · `vegas`
+(`base_points` engine) · `ranking` (VORP/ranks/tiers) · `adp` (FFC → market block) ·
+`espn_adp` (ESPN ADP/draft-rank → market block, the default source) · `vegas`
 (Odds API totals + `finalize_adjusted`) · `softsignals` (manual 1-5 ratings → `soft_score`;
 `FACTOR_WEIGHTS` + `compute_soft_scores`) · `validate` (gate) ·
 `rank` (the `build_contract` orchestrator + CLI — the entry point).
@@ -94,8 +99,11 @@ nflreadpy column probe) · `ingest` (nflreadpy → `PlayerHistory`, vets + rooki
 
 - **Stats:** `nflreadpy` (NOT `nfl-data-py`, which is abandoned). Uses Polars. **Verify column
   names with `probe.py` before coding** — they're not all documented.
-- **ADP:** FantasyFootballCalculator free API (Sleeper has **no public ADP endpoint**). Joined to
-  players by normalized name + position.
+- **ADP:** **ESPN** by default (`espn_adp.py` — free public `kona_player_info`; live ADP in draft
+  season, ESPN's draft rank in the offseason — matches an ESPN draft), falling back to
+  **FantasyFootballCalculator** (`adp.py`) if ESPN is unreachable. `--adp-source espn|ffc` picks;
+  `meta.adp_source` records which was used. Both joined by normalized name + position; the market
+  drives `value_vs_adp` **and** the app's mock-draft bots.
 - **Vegas:** The Odds API; reads `THE_ODDS_API_KEY` from env, skips gracefully if unset/offseason.
 - **Committed** (`pipeline/data/`): `team_situations.json` + `player_overrides.json` are
   **user-generated via the app's Soft Signals studio** (manual 1-5 ratings, then Download);

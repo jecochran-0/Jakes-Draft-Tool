@@ -70,6 +70,7 @@ export interface Meta {
   scoring_config: Record<string, number>;
   league_config: { teams: number; lineup: Record<string, number>; flex_eligible: string[] };
   team_situations?: Record<string, TeamSituation>;
+  adp_source?: string | null; // "espn" (default) or "ffc"
 }
 
 export interface Contract {

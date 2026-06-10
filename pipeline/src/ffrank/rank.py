@@ -20,6 +20,7 @@ import requests
 
 from .adp import attach_market, fetch_adp
 from .config import CURRENT_SEASON, DEFAULT_LEAGUE, scoring_for
+from .espn_adp import fetch_espn_adp
 from .ingest import build_histories, build_rookie_histories
 from .project import PlayerHistory, project_base_points
 from .ranking import build_board
@@ -55,9 +56,46 @@ def _player_from_history(h: PlayerHistory, scoring_key: str = "ppr") -> Player:
     )
 
 
+MIN_ADP_MATCH = 80  # below this an ADP source is treated as unusable -> fall back
+
+
+def _join_adp(players: list[Player], season: int, scoring_key: str, prefer: str = "espn") -> str | None:
+    """Attach the market block from the preferred ADP source, falling back to the other.
+    Returns the source actually used ('espn'/'ffc') or None. Never hard-fails."""
+    def try_espn() -> str | None:
+        payload = fetch_espn_adp(scoring_key=scoring_key, season=season)
+        matched, total = attach_market(players, payload)
+        m = payload.get("meta", {})
+        if matched >= MIN_ADP_MATCH:
+            print(f"ADP: ESPN {m.get('metric')} — matched {matched}/{total} skill players")
+            return "espn"
+        print(f"ADP: ESPN matched only {matched}/{total}; falling back")
+        return None
+
+    def try_ffc() -> str | None:
+        payload = fetch_adp(scoring_key=scoring_key, teams=DEFAULT_LEAGUE.teams)
+        matched, total = attach_market(players, payload)
+        mi = payload.get("meta", {})
+        print(f"ADP: FFC — matched {matched}/{total} skill players ({mi.get('total_drafts')} drafts)")
+        return "ffc" if matched >= MIN_ADP_MATCH else None
+
+    order = ["espn", "ffc"] if prefer == "espn" else ["ffc", "espn"]
+    for src in order:
+        try:
+            used = (try_espn if src == "espn" else try_ffc)()
+            if used:
+                return used
+        except requests.RequestException as e:
+            print(f"ADP: {src} fetch failed ({e})")
+        for p in players:  # clear any partial attach before trying the fallback
+            p.market = None
+    print("ADP: no source available; market left null")
+    return None
+
+
 def build_contract(season: int, scoring_key: str = "ppr", with_adp: bool = True,
                    with_rookies: bool = True, with_vegas: bool = True,
-                   with_soft: bool = True) -> Contract:
+                   with_soft: bool = True, adp_prefer: str = "espn") -> Contract:
     scoring = scoring_for(scoring_key)
     histories: list[PlayerHistory] = []
     for pos in SKILL_POSITIONS:
@@ -111,15 +149,8 @@ def build_contract(season: int, scoring_key: str = "ppr", with_adp: bool = True,
     players.sort(key=lambda p: p.projection.overall_rank or 10**9)
 
     # Live ADP join -> market block (value_vs_adp uses the FINAL overall_rank). Never hard-fail.
-    if with_adp:
-        try:
-            payload = fetch_adp(scoring_key=scoring_key, teams=DEFAULT_LEAGUE.teams)
-            matched, total = attach_market(players, payload)
-            meta_info = payload.get("meta", {})
-            print(f"ADP: matched {matched}/{total} skill players "
-                  f"({meta_info.get('total_drafts')} drafts, {meta_info.get('start_date')}..{meta_info.get('end_date')})")
-        except requests.RequestException as e:
-            print(f"ADP: fetch failed ({e}); market left null")
+    # Market reference defaults to ESPN (matches an ESPN draft), falling back to FFC.
+    adp_source = _join_adp(players, season, scoring_key, adp_prefer) if with_adp else None
 
     meta = Meta(
         generated_at=datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ"),
@@ -127,6 +158,7 @@ def build_contract(season: int, scoring_key: str = "ppr", with_adp: bool = True,
         scoring_config=scoring,
         league_config=DEFAULT_LEAGUE,
         team_situations=team_ratings,
+        adp_source=adp_source,
     )
     return Contract(meta=meta, players=players)
 
@@ -164,6 +196,8 @@ def main() -> None:
     ap.add_argument("--top", type=int, default=24)
     ap.add_argument("--no-write", action="store_true")
     ap.add_argument("--no-adp", action="store_true", help="skip the live ADP fetch (offline)")
+    ap.add_argument("--adp-source", choices=["espn", "ffc"], default="espn",
+                    help="market ADP source (default espn; falls back to the other)")
     ap.add_argument("--no-rookies", action="store_true", help="exclude incoming rookie class")
     ap.add_argument("--no-vegas", action="store_true", help="skip the Vegas team-totals fetch")
     ap.add_argument("--no-soft", action="store_true",
@@ -172,7 +206,7 @@ def main() -> None:
 
     contract = build_contract(args.season, scoring_key=args.scoring, with_adp=not args.no_adp,
                               with_rookies=not args.no_rookies, with_vegas=not args.no_vegas,
-                              with_soft=not args.no_soft)
+                              with_soft=not args.no_soft, adp_prefer=args.adp_source)
 
     # Human-readable eyeball check.
     print(f"\nDraft board — {args.season} (Full PPR, 12-team; veterans only; rookies = later slice)\n")
