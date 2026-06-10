@@ -82,6 +82,19 @@ def test_reasoning_names_the_driving_factors():
     assert "competition 1/5" in reasoning and "drag" in reasoning
 
 
+def test_stay_put_soft_is_shrunk_vs_new_env():
+    # Same rating; the new-env player (base is blind) gets full strength, the stay-put vet half.
+    new = _p("new", "Rookie", "RB", "ATL", 200.0)
+    stay = _p("stay", "Vet", "RB", "ATL", 200.0)
+    overrides = {"new": {"role": 5}, "stay": {"role": 5}}
+    scores = compute_soft_scores([new, stay], {}, overrides, {"new"})
+    assert scores["new"][0] == 1.04                       # 0.04 * (5-3)/2, full
+    assert scores["stay"][0] == 1.02                       # half of the deviation
+    assert (scores["stay"][0] - 1.0) == 0.5 * (scores["new"][0] - 1.0)
+    # new_env_ids=None disables the shrink (everyone full strength).
+    assert compute_soft_scores([stay], {}, {"stay": {"role": 5}})["stay"][0] == 1.04
+
+
 def test_compute_then_apply_drives_ranking():
     a = _p("a", "Boosted", "WR", "ATL", 200.0)
     b = _p("b", "Faded", "WR", "ATL", 200.0)

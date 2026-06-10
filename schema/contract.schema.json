@@ -76,6 +76,7 @@
         "team": { "type": "string" },
         "age": { "type": ["number", "null"] },
         "is_rookie": { "type": "boolean" },
+        "new_env": { "type": "boolean", "description": "Rookie or team-changer — base is blind to their current situation, so soft signals apply at full strength." },
         "raw_stats": {
           "type": "object",
           "additionalProperties": false,

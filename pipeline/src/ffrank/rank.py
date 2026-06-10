@@ -69,6 +69,8 @@ def build_contract(season: int, scoring_key: str = "ppr", with_adp: bool = True,
     # Players whose current environment isn't in their stats (rookies + team-changers) get the
     # Vegas tilt; stay-put veterans don't (their offense is already in base_points).
     new_env_ids = new_env_player_ids(histories)
+    for p in players:
+        p.new_env = p.id in new_env_ids
 
     # Manual situational ratings (1-5) from the two committed files. attach_situation records the
     # six factors on each player for display; compute applies the weighted multiplier below.
@@ -95,7 +97,7 @@ def build_contract(season: int, scoring_key: str = "ppr", with_adp: bool = True,
     # ratings are a no-op, so this is safe to run unconditionally (the board reflects whatever
     # is committed). --no-soft skips it entirely (ranks on base).
     if with_soft:
-        scores = compute_soft_scores(players, team_ratings, player_overrides)
+        scores = compute_soft_scores(players, team_ratings, player_overrides, new_env_ids)
         applied = apply_soft_scores(players, scores)
         if applied:
             print(f"Soft signals: rated {applied} players (composed with Vegas into adjusted_points)")

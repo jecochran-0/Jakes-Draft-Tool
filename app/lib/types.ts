@@ -41,6 +41,7 @@ export interface Player {
   team: string;
   age: number | null;
   is_rookie: boolean;
+  new_env?: boolean; // rookie or team-changer: base is blind to their situation → soft at full strength
   raw_stats: RawStats;
   situation: Situation | null;
   projection: Projection;

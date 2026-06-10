@@ -178,7 +178,10 @@ export function SoftSignals({
           <span className="font-semibold text-ink"> 3 = no change (no effect)</span>, 5 = clear upgrade, 1 = clear
           decline. Leave unchanged players at 3; rookies (no prior season) rate their new spot. Tap a factor's{" "}
           <span className="font-semibold text-ink">ⓘ</span> for specifics. Team factors apply to everyone on the
-          team; player factors are per-player. The board nudges the projection ±15%. Download the two files into{" "}
+          team; player factors are per-player. Ratings count <span className="font-semibold text-ink">full</span> for
+          rookies &amp; team-changers (the model can't see their new spot) and{" "}
+          <span className="font-semibold text-ink">half</span> for stay-put veterans (it already knows them). The
+          board nudges the projection ±15%. Download the two files into{" "}
           <span className="font-mono text-ink">pipeline/data/</span> and run{" "}
           <span className="font-mono text-ink">make board</span> to re-rank.
         </p>
@@ -252,12 +255,29 @@ export function SoftSignals({
               return (
                 <div key={p.id} className="rounded-2xl bg-surface p-3.5 shadow-card">
                   <div className="mb-2 flex items-center justify-between gap-3">
-                    <span className="truncate text-sm font-semibold text-ink">
-                      {p.name}
-                      <span className="ml-1.5 text-xs font-normal text-ink-faint">
-                        {p.position} · {p.team || "FA"}
+                    <div className="flex min-w-0 items-center gap-2">
+                      <span className="truncate text-sm font-semibold text-ink">
+                        {p.name}
+                        <span className="ml-1.5 text-xs font-normal text-ink-faint">
+                          {p.position} · {p.team || "FA"}
+                        </span>
                       </span>
-                    </span>
+                      {(() => {
+                        const full = p.is_rookie || p.new_env;
+                        const label = p.is_rookie ? "rookie" : p.new_env ? "new team" : "stay-put · ½";
+                        return (
+                          <span
+                            className={
+                              "shrink-0 rounded px-1.5 py-0.5 text-[10px] font-semibold " +
+                              (full ? "bg-lime/15 text-lime" : "bg-surface-2 text-ink-faint")
+                            }
+                            title={full ? "Base is blind here — soft ratings count full" : "Base already knows this player — soft ratings count half"}
+                          >
+                            {label}
+                          </span>
+                        );
+                      })()}
+                    </div>
                     <span className="flex shrink-0 items-center gap-2 tabular text-sm">
                       <span className="text-ink-faint">{fmt1(p.projection.base_points)}</span>
                       <span className="text-ink-faint">→</span>

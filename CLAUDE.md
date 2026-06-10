@@ -66,8 +66,11 @@ get `src/` via `pyproject.toml`'s `pythonpath`, so `make test` needs no env.
     **Ratings are CHANGE vs last year, not absolute level (3 = unchanged → no effect):**
     `base_points` already encodes a returning vet's role/offense/QB/competition (it *is* their
     production), so rating those levels would double-count. Only what's *different* — new QB,
-    scheme, OL, role, or competition; and a rookie's whole new landing spot — is rated. Same
-    anti-double-counting logic as the Vegas targeting (stay-put vets stay near neutral).
+    scheme, OL, role, or competition; and a rookie's whole new landing spot — is rated.
+    **Mechanically, the soft deviation is scaled by how blind the base is:** full strength for
+    rookies + team-changers (`new_env`, the same set the Vegas tilt targets), shrunk
+    ×`STAY_PUT_SOFT_WEIGHT` (0.5) for stay-put veterans, whose situation `base_points` already
+    encodes. The app mirrors this via `player.new_env` and labels each row full/half.
   - If neither applies, `adjusted` stays null → the board ranks on `base_points` (signals-off
     fallback). Vegas is null in the deep offseason, so an unrated board is pure stats + scarcity.
 - **`ranking_metric(p)`** (ranking.py) = `adjusted` if set else `base`. **Everything** — VORP,

@@ -27,6 +27,12 @@ PLAYER_OVERRIDES_PATH = DATA_DIR / "player_overrides.json"
 SOFT_MIN, SOFT_MAX = 0.85, 1.15
 NEUTRAL = 3  # 1-5 scale; 3 = neutral / no effect.
 
+# How much of a STAY-PUT veteran's soft deviation actually applies. base_points already encodes a
+# returning vet's situation, so we trust a manual change-rating only half as much for them. Rookies
+# and team-changers (new_env) get full strength — the base is blind to their current environment.
+# Same discipline as the Vegas tilt (vegas.new_env_player_ids).
+STAY_PUT_SOFT_WEIGHT = 0.5
+
 # The six non-overlapping factors. Four are team-wide (one rating per team), two are per player.
 TEAM_FACTORS = ("qb", "ol", "scheme", "pace")
 PLAYER_FACTORS = ("role", "competition")
@@ -120,11 +126,17 @@ def soft_for_ratings(ratings: dict[str, int], position: str) -> float:
 
 
 def compute_soft_scores(players: list[Player], team_ratings: dict[str, dict],
-                        player_overrides: dict[str, dict]) -> dict[str, tuple[float, str]]:
+                        player_overrides: dict[str, dict],
+                        new_env_ids: set[str] | None = None) -> dict[str, tuple[float, str]]:
     """id -> (soft_score, reasoning) for every player whose ratings have a NET effect.
 
     Players with all-neutral (or only zero-weight) ratings are omitted, so they stay unscored
-    and rank on base_points — the same fallback behavior as 'no soft scores provided'."""
+    and rank on base_points — the same fallback behavior as 'no soft scores provided'.
+
+    The soft deviation is applied at FULL strength for new-environment players (rookies +
+    team-changers, in `new_env_ids`) and shrunk by STAY_PUT_SOFT_WEIGHT for stay-put veterans,
+    whose situation base_points already encodes. Passing new_env_ids=None disables the shrink
+    (everyone full strength) — used by unit tests that don't model team changes."""
     scores: dict[str, tuple[float, str]] = {}
     for p in players:
         ratings = player_ratings(p, team_ratings, player_overrides)
@@ -132,6 +144,8 @@ def compute_soft_scores(players: list[Player], team_ratings: dict[str, dict],
         raw = sum(weights.get(f, 0.0) * (ratings[f] - NEUTRAL) / 2 for f in FACTORS)
         if abs(raw) < 1e-9:
             continue  # no net effect -> leave on base
+        if new_env_ids is not None and p.id not in new_env_ids:
+            raw *= STAY_PUT_SOFT_WEIGHT  # stay-put vet: trust the change-rating half as much
         scores[p.id] = (round(_clamp(1.0 + raw), 4), _reasoning(ratings, weights))
     return scores
 

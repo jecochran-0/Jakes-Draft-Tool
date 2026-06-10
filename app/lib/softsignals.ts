@@ -5,6 +5,9 @@ import type { Player, PlayerOverride, TeamSituation } from "./types";
 export const SOFT_MIN = 0.85;
 export const SOFT_MAX = 1.15;
 export const NEUTRAL = 3; // 1-5 scale; 3 = neutral / no effect.
+// Stay-put veterans get half their soft deviation (base_points already encodes their situation);
+// rookies + team-changers (player.new_env) get full strength. Mirrors softsignals.py.
+export const STAY_PUT_SOFT_WEIGHT = 0.5;
 
 export const TEAM_FACTORS = ["qb", "ol", "scheme", "pace"] as const;
 export const PLAYER_FACTORS = ["role", "competition"] as const;
@@ -80,10 +83,11 @@ export interface SoftResult {
   soft: number;
   reasoning: string;
   effect: boolean; // false when ratings net to no change (player ranks on base)
+  shrunk: boolean; // true when a stay-put vet's deviation was halved
   ratings: Ratings;
 }
 
-/** Position-weighted multiplier from a player's ratings. */
+/** Position-weighted multiplier from a player's ratings, scaled by how blind the base is. */
 export function computeSoft(
   player: Player,
   teamRatings: Record<string, TeamSituation>,
@@ -91,9 +95,11 @@ export function computeSoft(
 ): SoftResult {
   const ratings = playerRatings(player, teamRatings, overrides);
   const weights = WEIGHTS[player.position] ?? ({} as Record<Factor, number>);
-  const raw = FACTORS.reduce((s, f) => s + (weights[f] ?? 0) * ((ratings[f] - NEUTRAL) / 2), 0);
+  let raw = FACTORS.reduce((s, f) => s + (weights[f] ?? 0) * ((ratings[f] - NEUTRAL) / 2), 0);
   const effect = Math.abs(raw) >= 1e-9;
-  return { soft: round4(clamp(1 + raw)), reasoning: reasoning(ratings, weights), effect, ratings };
+  const shrunk = effect && !player.new_env;
+  if (shrunk) raw *= STAY_PUT_SOFT_WEIGHT; // base already knows a stay-put vet → trust the rating half as much
+  return { soft: round4(clamp(1 + raw)), reasoning: reasoning(ratings, weights), effect, shrunk, ratings };
 }
 
 function download(filename: string, body: unknown) {

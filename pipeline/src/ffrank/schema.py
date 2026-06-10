@@ -84,6 +84,10 @@ class Player(BaseModel):
     team: str
     age: Optional[float] = None
     is_rookie: bool = False
+    # True when the player's current environment isn't reflected in their stats (rookie or
+    # team-changer). Soft signals (and the Vegas tilt) apply at full strength here; stay-put
+    # veterans are shrunk, since base_points already encodes their situation.
+    new_env: bool = False
     raw_stats: RawStats = Field(default_factory=RawStats)
     situation: Optional[Situation] = None
     projection: Projection
