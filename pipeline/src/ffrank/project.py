@@ -38,6 +38,31 @@ POSITION_BASELINE_PG: dict[str, float] = {
     "TE": 5.0,
 }
 
+# --- Touchdown regression (validated on the gate: +~0.012 Spearman, biggest for QB) ----------
+# Touchdowns are the highest-variance fantasy input and regress hard year-to-year. We pull each
+# season's TDs `TD_REGRESS_LAMBDA` of the way toward a yardage-expected count before blending, so
+# career TD spikes don't carry forward at full weight. Rates are league TD-per-yard by position +
+# category, derived from 2024-2025 nflverse aggregates (stable league constants; the irrelevant
+# cells — e.g. RB passing — sit at ~0 yards so they contribute nothing). TD point values are
+# scoring-format-invariant, so this is identical across ppr/half/standard.
+TD_REGRESS_LAMBDA = 0.7
+TD_POINTS = {"pass": 4.0, "rush": 6.0, "rec": 6.0}
+TD_PER_YARD: dict[str, dict[str, float]] = {
+    "QB": {"pass": 0.0060, "rush": 0.0105, "rec": 0.0},
+    "RB": {"pass": 0.0,    "rush": 0.0070, "rec": 0.0051},
+    "WR": {"pass": 0.0,    "rush": 0.0082, "rec": 0.0059},
+    "TE": {"pass": 0.0,    "rush": 0.0148, "rec": 0.0069},
+}
+
+# --- Expected games / availability (validated on the gate: +~0.033 Spearman, the biggest lever) --
+# The old engine projected EVERYONE to a full 17 games, so a fragile high-ppg player looked
+# identical to an iron-man. We instead expect games from the player's own recency-weighted games
+# history, regressed 40% toward a full season (durability persists but isn't destiny), with a
+# small age tax. This de-risks injury-prone players — exactly the draft trap a per-game model hides.
+EXP_GAMES_RECENCY = [0.6, 0.3, 0.1]
+EXP_GAMES_SELF_WEIGHT = 0.6   # 60% own history, 40% full-season regression
+EXP_GAMES_FLOOR = 8.0
+
 # Rookie base_points anchors by POSITION and draft-capital bucket (overall pick), full-season
 # PPR. Position-specific because year-1 fantasy value differs sharply: rookie RB/WR can be
 # immediately productive, rookie QBs score on a higher absolute scale (so a flat RB/WR anchor
@@ -69,6 +94,17 @@ class SeasonLine:
     season: int
     points: float       # fantasy points in the chosen scoring, that season
     games: int
+    # Optional per-season components (default 0/None → callers that don't populate them keep
+    # the legacy points-only behavior). Used by the efficiency-regression / opportunity experiments.
+    pass_yds: float = 0.0
+    pass_td: float = 0.0
+    rush_yds: float = 0.0
+    rush_td: float = 0.0
+    receptions: float = 0.0
+    rec_yds: float = 0.0
+    rec_td: float = 0.0
+    target_share: float | None = None
+    snap_share: float | None = None
 
 
 @dataclass
@@ -128,19 +164,50 @@ def age_multiplier(position: str, age: float | None) -> float:
     return 1.0
 
 
-def _recency_weights(n: int) -> list[float]:
-    w = RECENCY_WEIGHTS[:n]
-    s = sum(w)
+def _recency_weights(n: int, weights: list[float] = RECENCY_WEIGHTS) -> list[float]:
+    w = weights[:n]
+    s = sum(w) or 1.0
     return [x / s for x in w]
 
 
+def _regressed_points(s: "SeasonLine", position: str) -> float:
+    """A season's fantasy points with each TD category pulled TD_REGRESS_LAMBDA toward its
+    yardage-expected count. Categories with no yards (or zero rate) are untouched."""
+    rates = TD_PER_YARD.get(position)
+    if not rates:
+        return s.points
+    delta = (
+        TD_POINTS["pass"] * (s.pass_yds * rates["pass"] - s.pass_td)
+        + TD_POINTS["rush"] * (s.rush_yds * rates["rush"] - s.rush_td)
+        + TD_POINTS["rec"] * (s.rec_yds * rates["rec"] - s.rec_td)
+    )
+    return s.points + TD_REGRESS_LAMBDA * delta
+
+
+def expected_games(p: PlayerHistory) -> float:
+    """Expected games played next season: recency-weighted games history regressed toward a full
+    season, with a small age tax. Replaces the old flat 17 so fragile players don't over-project."""
+    lines = [ln for ln in sorted(p.seasons, key=lambda s: s.season, reverse=True)[:3] if ln.games]
+    if not lines:
+        return SEASON_GAMES
+    w = _recency_weights(len(lines), EXP_GAMES_RECENCY)
+    own = sum(wi * min(ln.games, SEASON_GAMES) for wi, ln in zip(w, lines))
+    exp = EXP_GAMES_SELF_WEIGHT * own + (1 - EXP_GAMES_SELF_WEIGHT) * SEASON_GAMES
+    if p.position == "RB" and p.age is not None and p.age >= 28:
+        exp -= 0.8
+    if p.age is not None and p.age >= 31:
+        exp -= 0.8
+    return max(EXP_GAMES_FLOOR, min(SEASON_GAMES, exp))
+
+
 def project_veteran(p: PlayerHistory, games_target: int = SEASON_GAMES) -> float:
-    """Reliability+recency-weighted per-game blend -> calibrate -> full season -> age adjust.
+    """Reliability+recency-weighted per-game blend -> calibrate -> expected games -> age adjust.
 
     Each season's weight = recency_weight x (min(games,17)/17), so partial seasons (small
-    samples) contribute less to the per-game rate than full ones. We do NOT shrink by total
-    games observed (that distorted ranks by demoting low-games breakouts); calibration is a
-    fixed, rank-preserving nudge toward the position baseline.
+    samples) contribute less to the per-game rate than full ones. The per-game rate uses
+    TD-regressed points (career TD spikes don't carry forward at full weight). The full-season
+    multiply uses EXPECTED games (availability), not a flat 17, so fragile players don't
+    over-project. Calibration is a fixed, rank-preserving nudge toward the position baseline.
     """
     # Most recent up to 3 seasons, newest first.
     lines = sorted(p.seasons, key=lambda s: s.season, reverse=True)[:3]
@@ -152,10 +219,12 @@ def project_veteran(p: PlayerHistory, games_target: int = SEASON_GAMES) -> float
     recency = _recency_weights(len(lines))
     weights = [w * min(ln.games, games_target) / games_target for w, ln in zip(recency, lines)]
     total_w = sum(weights) or 1.0
-    blended_pg = sum(w * (ln.points / ln.games) for w, ln in zip(weights, lines)) / total_w
+    blended_pg = sum(w * (_regressed_points(ln, p.position) / ln.games)
+                     for w, ln in zip(weights, lines)) / total_w
 
     calibrated_pg = (1 - SHRINK_TO_BASELINE) * blended_pg + SHRINK_TO_BASELINE * baseline_pg
-    return calibrated_pg * games_target * age_multiplier(p.position, p.age)
+    games = expected_games(p) if games_target == SEASON_GAMES else games_target
+    return calibrated_pg * games * age_multiplier(p.position, p.age)
 
 
 def project_rookie(p: PlayerHistory, scoring_key: str = "ppr",

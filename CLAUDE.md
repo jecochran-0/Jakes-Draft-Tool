@@ -45,8 +45,13 @@ get `src/` via `pyproject.toml`'s `pythonpath`, so `make test` needs no env.
 
 ## Ranking model — how the signals combine (keep them non-overlapping)
 
-- **`base_points`** = stats (veterans: recency+reliability-weighted per-game blend → 17 games →
-  age curve) or draft capital (rookies, scaled per scoring format). The foundation.
+- **`base_points`** = stats (veterans) or draft capital (rookies, scaled per scoring format).
+  The veteran engine (`project.py`): recency+reliability-weighted per-game blend of **TD-regressed**
+  points (career TD spikes pulled toward yardage-expected, `TD_PER_YARD`) → × **expected games**
+  (`expected_games`: own games history regressed toward 17 + small age tax, so fragile players
+  don't over-project) → age curve. Both levers were validated on the gate (mean Spearman
+  0.714→0.751, top-24 0.65→0.71); trajectory-recency and opportunity-trend were tried and
+  **rejected** (they hurt) — see `experiments.py`. The foundation.
 - **`adjusted_points = base × vegas_mult × soft_mult`** — computed in **one place**,
   `vegas.finalize_adjusted`:
   - **Vegas tilt** (±8%, clamped) applies **only to rookies + team-changers**
@@ -58,6 +63,11 @@ get `src/` via `pyproject.toml`'s `pythonpath`, so `make test` needs no env.
     from 3 (neutral) is weighted by a **position-specific table summing to 0.15** (`FACTOR_WEIGHTS`
     in `softsignals.py`) — e.g. OL drives RBs, QB drives WR/TE, and is zeroed where it doesn't
     apply. Ratings are entered in the app's Soft Signals studio, downloaded as the two JSON files.
+    **Ratings are CHANGE vs last year, not absolute level (3 = unchanged → no effect):**
+    `base_points` already encodes a returning vet's role/offense/QB/competition (it *is* their
+    production), so rating those levels would double-count. Only what's *different* — new QB,
+    scheme, OL, role, or competition; and a rookie's whole new landing spot — is rated. Same
+    anti-double-counting logic as the Vegas targeting (stay-put vets stay near neutral).
   - If neither applies, `adjusted` stays null → the board ranks on `base_points` (signals-off
     fallback). Vegas is null in the deep offseason, so an unrated board is pure stats + scarcity.
 - **`ranking_metric(p)`** (ranking.py) = `adjusted` if set else `base`. **Everything** — VORP,
@@ -93,8 +103,10 @@ nflreadpy column probe) · `ingest` (nflreadpy → `PlayerHistory`, vets + rooki
 ## Validation gate (do not skip when touching the engine)
 
 `make gate` predicts 2025 from ≤2024 and 2024 from ≤2023 vs actual `fantasy_points_ppr`. Bar:
-**beat the naive last-season baseline on Spearman** (currently 8/8, ρ ≈ 0.63–0.78). Re-run it
-after any change to `project.py` / `ranking.py` / `config.py`.
+**beat the naive last-season baseline on Spearman** (currently 8/8, ρ ≈ 0.70–0.81). Re-run it
+after any change to `project.py` / `ranking.py` / `config.py`. To A/B a new projection lever
+across all 8 folds before promoting it, use the experiment harness:
+`PYTHONPATH=src python -m ffrank.experiments`.
 
 ## Conventions
 

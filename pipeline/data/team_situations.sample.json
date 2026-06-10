@@ -1,5 +1,5 @@
 [
-  { "team": "ATL", "qb": 3, "ol": 4, "scheme": 4, "pace": 2, "notes": "new OC, zone-run scheme inflates RB volume; clear lead back" },
-  { "team": "KC",  "qb": 5, "ol": 4, "scheme": 4, "pace": 4, "notes": "elite QB; pass-heavy but volatile target distribution" },
-  { "team": "NO",  "qb": 2, "ol": 3, "scheme": 3, "pace": 2, "notes": "QB downgrade caps the passing game ceiling" }
+  { "team": "ATL", "qb": 3, "ol": 3, "scheme": 4, "pace": 2, "notes": "CHANGE vs last year: new OC installs a zone-run scheme (helps RBs); pace leans run-heavier" },
+  { "team": "NYG", "qb": 5, "ol": 3, "scheme": 3, "pace": 3, "notes": "CHANGE vs last year: clear QB upgrade over last season's room" },
+  { "team": "CIN", "qb": 3, "ol": 2, "scheme": 3, "pace": 3, "notes": "CHANGE vs last year: lost two OL starters in free agency" }
 ]

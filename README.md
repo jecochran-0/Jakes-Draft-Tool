@@ -81,10 +81,15 @@ Situational judgment → a `soft_score` multiplier → `adjusted_points = base �
 board **re-ranks on adjusted** (VORP/tiers already read it via `ranking.ranking_metric`).
 **Cost $0** — you rate the factors by hand, no paid API.
 
-You rate **six non-overlapping factors 1–5** (5=best, 3=neutral) in the app's Soft Signals studio:
-team-wide **QB / OL / scheme / pace** and per-player **role / target-competition**. Each rating's
-deviation from 3 is weighted by a **position-specific table that sums to 0.15** (`FACTOR_WEIGHTS`),
-so OL drives RBs, QB drives WR/TE, and a factor is zeroed where it doesn't apply.
+You rate **six non-overlapping factors 1–5** in the app's Soft Signals studio: team-wide
+**QB / OL / scheme / pace** and per-player **role / target-competition**. Each rating's deviation
+from 3 is weighted by a **position-specific table that sums to 0.15** (`FACTOR_WEIGHTS`), so OL
+drives RBs, QB drives WR/TE, and a factor is zeroed where it doesn't apply.
+
+**Rate the CHANGE vs last year, not the absolute level (3 = unchanged → no effect).** `base_points`
+already encodes a returning vet's role/offense/competition — it *is* their production — so rating
+those levels double-counts. Only what's *different* (new QB, scheme, OL, role, competition; a
+rookie's whole new spot) moves the needle; unchanged stay-put vets stay at 3.
 ```bash
 # Edit ratings in the app -> Download -> save into pipeline/data/:
 #   team_situations.json   [{team, qb, ol, scheme, pace, notes}]
@@ -99,8 +104,10 @@ python -m ffrank.rank --season 2026 --no-soft  # ignore ratings, rank on base_po
 
 ### How the signals combine (ranking model)
 One number drives everything; each signal has a defined, non-overlapping job:
-- **`base_points`** = stats (veterans: recency/reliability-weighted per-game blend + age) or
-  draft capital (rookies, format-scaled). The foundation.
+- **`base_points`** = stats (veterans: recency/reliability-weighted per-game blend of TD-regressed
+  points × **expected games** (availability) × age) or draft capital (rookies, format-scaled). The
+  TD-regression + expected-games levers were validated on the gate (mean Spearman 0.71→0.75). The
+  foundation.
 - **`adjusted_points = base × vegas_mult × soft_mult`** — the single place adjustments combine:
   - **Vegas** tilts (±8%, clamped) **only rookies + team-changers** — players whose current
     environment *isn't* in their stats. Stay-put veterans are untouched (their offense is

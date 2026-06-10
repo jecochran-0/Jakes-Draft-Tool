@@ -20,6 +20,17 @@ export const FACTOR_LABEL: Record<Factor, string> = {
   competition: "Competition",
 };
 
+// One-line explainers behind the ⓘ. Rate the CHANGE vs last year — the projection already
+// reflects last season's situation, so 3 = no change = no effect, 5 = clear upgrade, 1 = decline.
+export const FACTOR_INFO: Record<Factor, string> = {
+  qb: "Change in QB play vs last year. 5 = clear upgrade, 1 = clear downgrade, 3 = same QB → no effect. Biggest lever for WR/TE; little for RBs; ignored for a QB rating his own team.",
+  ol: "Change in the offensive line vs last year. 5 = materially better (key additions), 1 = materially worse (losses), 3 = unchanged. Biggest lever for RBs; negligible for WR/TE.",
+  scheme: "Change in scheme / play-caller vs last year. 5 = new system that fits this position better, 1 = worse fit, 3 = same scheme.",
+  pace: "Change in the offense's volume or pass-run lean vs last year. 5 = more favorable for this position, 1 = less favorable, 3 = unchanged.",
+  role: "Change in this player's role/opportunity vs last year. 5 = bigger role (promotion, vacated touches), 1 = smaller role (new committee, lost a job), 3 = unchanged. Rookies: rate the role they're stepping into.",
+  competition: "Change in target/touch competition vs last year. 5 = competition left (cleaner path), 1 = competition added (draft pick/signing), 3 = unchanged. Rookies: rate the room they land in.",
+};
+
 // Each position's weights SUM TO 0.15 → "everything maxed" lands exactly on the ±15% bound.
 export const WEIGHTS: Record<string, Record<Factor, number>> = {
   RB: { qb: 0.0, ol: 0.05, scheme: 0.025, pace: 0.015, role: 0.04, competition: 0.02 },

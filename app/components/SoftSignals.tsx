@@ -6,7 +6,9 @@ import {
   computeSoft,
   downloadOverrides,
   downloadTeams,
+  FACTOR_INFO,
   FACTOR_LABEL,
+  type Factor,
   NEUTRAL,
   PLAYER_FACTORS,
   TEAM_FACTORS,
@@ -45,11 +47,35 @@ function Rating({ value, onChange }: { value: number; onChange: (n: number) => v
   );
 }
 
-function FactorRow({ label, value, onChange }: { label: string; value: number; onChange: (n: number) => void }) {
+function FactorRow({ factor, value, onChange }: { factor: Factor; value: number; onChange: (n: number) => void }) {
+  const [open, setOpen] = useState(false);
   return (
-    <div className="flex items-center justify-between gap-3">
-      <span className="text-xs font-medium text-ink-muted">{label}</span>
-      <Rating value={value} onChange={onChange} />
+    <div>
+      <div className="flex items-center justify-between gap-3">
+        <button
+          type="button"
+          onClick={() => setOpen((o) => !o)}
+          className="flex items-center gap-1.5 text-xs font-medium text-ink-muted transition-colors hover:text-ink"
+          aria-expanded={open}
+          aria-label={`What is ${FACTOR_LABEL[factor]}?`}
+        >
+          {FACTOR_LABEL[factor]}
+          <span
+            className={
+              "flex h-3.5 w-3.5 items-center justify-center rounded-full border text-[8px] font-bold leading-none " +
+              (open ? "border-lime text-lime" : "border-ink-faint text-ink-faint")
+            }
+          >
+            i
+          </span>
+        </button>
+        <Rating value={value} onChange={onChange} />
+      </div>
+      {open && (
+        <p className="mt-1.5 rounded-lg bg-base/50 px-2.5 py-2 text-[11px] leading-relaxed text-ink-faint ring-1 ring-line">
+          {FACTOR_INFO[factor]}
+        </p>
+      )}
     </div>
   );
 }
@@ -147,9 +173,12 @@ export function SoftSignals({
       <div className="rounded-2xl bg-surface p-4 shadow-card">
         <h2 className="text-lg font-bold text-ink">Soft signals</h2>
         <p className="mt-1 text-sm leading-relaxed text-ink-muted">
-          Rate the situational factors stats miss on a <span className="font-semibold text-ink">1–5</span> scale
-          (3 = neutral). Team factors apply to everyone on the team; player factors are per-player. The board
-          derives a multiplier from your ratings, clamped to ±15%. Download the two files into{" "}
+          The projection <span className="font-semibold text-ink">already reflects last year's situation</span> —
+          so rate only what's <span className="font-semibold text-ink">changed</span> since. On a 1–5 scale where
+          <span className="font-semibold text-ink"> 3 = no change (no effect)</span>, 5 = clear upgrade, 1 = clear
+          decline. Leave unchanged players at 3; rookies (no prior season) rate their new spot. Tap a factor's{" "}
+          <span className="font-semibold text-ink">ⓘ</span> for specifics. Team factors apply to everyone on the
+          team; player factors are per-player. The board nudges the projection ±15%. Download the two files into{" "}
           <span className="font-mono text-ink">pipeline/data/</span> and run{" "}
           <span className="font-mono text-ink">make board</span> to re-rank.
         </p>
@@ -190,7 +219,7 @@ export function SoftSignals({
                   {TEAM_FACTORS.map((f) => (
                     <FactorRow
                       key={f}
-                      label={FACTOR_LABEL[f]}
+                      factor={f}
                       value={s[f] ?? NEUTRAL}
                       onChange={(v) => setTeamFactor(team, f, v)}
                     />
@@ -242,7 +271,7 @@ export function SoftSignals({
                     {PLAYER_FACTORS.map((f) => (
                       <FactorRow
                         key={f}
-                        label={FACTOR_LABEL[f]}
+                        factor={f}
                         value={o[f] ?? NEUTRAL}
                         onChange={(v) => setOverrideFactor(p.id, f, v)}
                       />

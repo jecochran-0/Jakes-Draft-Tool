@@ -92,7 +92,10 @@ def stats_table(seasons: tuple[int, ...], scoring: ScoringConfig) -> pl.DataFram
     df = df.with_columns(pl.Series("points", pts))
 
     keep = ["player_id", "player_display_name", "position", "recent_team", "season",
-            "games", "target_share", "points", "fantasy_points_ppr"]
+            "games", "target_share", "points", "fantasy_points_ppr",
+            # per-season components for the efficiency-regression / opportunity experiments
+            "passing_yards", "passing_tds", "rushing_yards", "rushing_tds",
+            "receptions", "receiving_yards", "receiving_tds"]
     return df.select([c for c in keep if c in df.columns])
 
 
@@ -158,8 +161,21 @@ def build_histories(
         birth_year = _birth_year(m.get("birth_date"))
         age = (project_season - birth_year) if birth_year else None
 
-        seasons = [SeasonLine(season=r["season"], points=r["points"], games=int(r["games"] or 0))
-                   for r in rows]
+        seasons = [
+            SeasonLine(
+                season=r["season"], points=r["points"], games=int(r["games"] or 0),
+                pass_yds=float(r.get("passing_yards") or 0.0),
+                pass_td=float(r.get("passing_tds") or 0.0),
+                rush_yds=float(r.get("rushing_yards") or 0.0),
+                rush_td=float(r.get("rushing_tds") or 0.0),
+                receptions=float(r.get("receptions") or 0.0),
+                rec_yds=float(r.get("receiving_yards") or 0.0),
+                rec_td=float(r.get("receiving_tds") or 0.0),
+                target_share=r.get("target_share"),
+                snap_share=snap_by_key.get((gsis_id, r["season"])),
+            )
+            for r in rows
+        ]
 
         histories.append(
             PlayerHistory(
